@@ -119,13 +119,13 @@ class PyTgCallsEngine(CallEngine):
 
     def start(self) -> None:
         from pyrogram import Client  # noqa: PLC0415 — heavy deps stay lazy
-        from pytgcalls import PyTgCalls
-        from pytgcalls.types import StreamEnded
+        from pytgcalls.types import StreamEnded, ChatUpdate
 
         self._StreamEnded = StreamEnded
         self._app = Client("pappy-stream", api_id=self._api_id, api_hash=self._api_hash, session_string=self._session)
         self._call = PyTgCalls(self._app)
         ended_cls = StreamEnded
+        chat_update_cls = ChatUpdate
         emit = self._on_event
 
         def _on_update(update: object) -> None:
@@ -133,6 +133,12 @@ class PyTgCallsEngine(CallEngine):
             if isinstance(update, ended_cls):
                 chat_id = int(getattr(update, "chat_id", 0))
                 emit(EngineEvent("ended", chat_id))
+            elif isinstance(update, chat_update_cls):
+                status = getattr(update, "status", None)
+                chat_id = int(getattr(update, "chat_id", 0))
+                if status in (ChatUpdate.Status.CLOSED_VOICE_CHAT, ChatUpdate.Status.DISCARDED_CALL, ChatUpdate.Status.KICKED, ChatUpdate.Status.LEFT_GROUP):
+                    self._live.discard(chat_id)
+                    emit(EngineEvent("call.left", chat_id))
 
         self._call.add_handler(_on_update)
         self._call.start()
@@ -201,6 +207,8 @@ class PyTgCallsEngine(CallEngine):
     def stop(self, chat_id: int) -> None:
         try:
             self._call.leave_call(chat_id)
+        except Exception:
+            pass
         finally:
             self._live.discard(chat_id)
 

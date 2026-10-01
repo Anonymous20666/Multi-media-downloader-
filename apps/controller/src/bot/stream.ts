@@ -471,7 +471,10 @@ export class StreamFlow {
         break;
       case "error":
         this.log.warn("worker error", { chatId, code: evt.error?.code, message: evt.error?.message });
+        await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+        await this.unpinLiveCard(chatId);
         this.queues.setState(chatId, "idle");
+        this.queues.reset(chatId);
         await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.error", { e: evt.error?.message ?? "unknown" }, locale) }, "interactive");
         break;
       case "pong":

@@ -1,13 +1,14 @@
 /**
  * MovieFlow: handles movie search across 16 categories, category browsing, and movie downloads.
  */
-import type { UmediaAdapter, SearchItem } from "@pappy/media-manifest";
+import type { UmediaAdapter, SearchItem, CaptionLanguage } from "@pappy/media-manifest";
 import type { Logger } from "../logger.js";
 import { t } from "../i18n/index.js";
 import { Sender } from "../telegram/sender.js";
 import { DeliveryService } from "./delivery.js";
 import { Presence } from "./presence.js";
-import { renderMovieCategories, renderMovieDetail, renderMovieError, renderMovieOptions } from "./movies-ui.js";
+import { packCb } from "../ui/components.js";
+import { renderMovieCategories, renderMovieDetail, renderMovieError, renderMovieOptions, renderSubtitleOptions } from "./movies-ui.js";
 import { Library } from "../state/library.js";
 import { SearchSessions, UserPrefs } from "../state/stores.js";
 
@@ -138,6 +139,84 @@ export class MovieFlow {
           message_id: messageId,
           text: `⚠️ *File exceeds Telegram limit (${Math.round(outcome.bytes / (1024 * 1024))} MB)*.\n\nYou can stream or download it directly here:\n[Direct Film Link](${item.downloadUrl})`,
           parse_mode: "Markdown",
+        },
+        "interactive",
+      );
+    }
+  }
+
+  /** User taps subtitles button (msb:<sessionId>:<index>). */
+  async subtitles(chatId: number, messageId: number, userId: number, target: string, locale = "en"): Promise<void> {
+    const [sessionId, idxStr] = target.split(":");
+    const idx = Number(idxStr);
+    const session = this.sessions.get(sessionId);
+    const item = session?.items[idx];
+    if (!session || !item) {
+      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("music.session.expired", {}, locale) }, "interactive");
+      return;
+    }
+
+    const videoUrl = item.pageUrl || item.downloadUrl || "";
+    let languages: CaptionLanguage[] = [];
+    if (videoUrl) {
+      try {
+        languages = await this.adapter.captionLanguages(videoUrl);
+      } catch {
+        languages = [];
+      }
+    }
+
+    const card = renderSubtitleOptions(sessionId, idx, item.title, languages, locale);
+    await this.sender.enqueue(
+      "editMessageText",
+      { chat_id: chatId, message_id: messageId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup },
+      "interactive",
+    );
+  }
+
+  /** User selects a subtitle language to download (msl:<sessionId>:<index>:<lang>). */
+  async downloadSubtitle(chatId: number, messageId: number, userId: number, target: string, locale = "en"): Promise<void> {
+    const [sessionId, idxStr, lang] = target.split(":");
+    const idx = Number(idxStr);
+    const session = this.sessions.get(sessionId);
+    const item = session?.items[idx];
+    if (!session || !item) {
+      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("music.session.expired", {}, locale) }, "interactive");
+      return;
+    }
+
+    const videoUrl = item.pageUrl || item.downloadUrl || "";
+    if (!videoUrl) return;
+
+    this.presence.action(chatId, "document");
+    await this.sender.enqueue(
+      "editMessageText",
+      { chat_id: chatId, message_id: messageId, text: `⏳ *Fetching ${lang.toUpperCase()} subtitles…*`, parse_mode: "Markdown" },
+      "interactive",
+    );
+
+    try {
+      const res = await this.adapter.fetchSubtitles({ url: videoUrl, lang });
+      await this.delivery.deliver(chatId, {
+        key: `sub:${sessionId}:${idx}:${lang}`,
+        kind: "document",
+        mediaUrl: res.path,
+        title: `${item.title} (${lang.toUpperCase()}).srt`,
+        caption: `💬 *Subtitles:* _${item.title}_ [${lang.toUpperCase()}]`,
+      });
+      await this.sender.enqueue("deleteMessage", { chat_id: chatId, message_id: messageId }, "interactive").catch(() => {});
+    } catch (e) {
+      this.log.warn("failed to fetch subtitles", { error: (e as Error).message });
+      await this.sender.enqueue(
+        "editMessageText",
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `⚠️ *Could not extract ${lang.toUpperCase()} subtitles.*\nSubtitles may be auto-generated or blocked.`,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[{ text: "‹ Back", callback_data: packCb("mo", `${sessionId}:${idx}`, 1) }]],
+          },
         },
         "interactive",
       );

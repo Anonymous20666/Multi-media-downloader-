@@ -549,6 +549,12 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "mdl":
           if (messageId && flows.movies) await flows.movies.download(chatId, messageId, userId, parsed.target);
           break;
+        case "msb":
+          if (messageId && flows.movies) await flows.movies.subtitles(chatId, messageId, userId, parsed.target);
+          break;
+        case "msl":
+          if (messageId && flows.movies) await flows.movies.downloadSubtitle(chatId, messageId, userId, parsed.target);
+          break;
         case "gz":
           if (messageId && flows.grab) await flows.grab.downloadZip(chatId, messageId, userId, parsed.target);
           break;

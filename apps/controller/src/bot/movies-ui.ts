@@ -1,7 +1,7 @@
 /**
  * Movies UI components: categories list, movie search options, and movie detail cards.
  */
-import type { SearchItem, MovieCategory } from "@pappy/media-manifest";
+import type { SearchItem, MovieCategory, CaptionLanguage } from "@pappy/media-manifest";
 import { t } from "../i18n/index.js";
 import { packCb, type FallbackMessage, type KbButton } from "../ui/components.js";
 
@@ -61,12 +61,51 @@ export function renderMovieDetail(sessionId: string, idx: number, it: SearchItem
     rows.push([{ text: t("movies.detail.download", {}, locale), callback_data: packCb("mdl", `${sessionId}:${idx}`, 1) }]);
   }
   if (it.pageUrl) {
-    rows.push([{ text: t("movies.detail.trailer", {}, locale), url: it.pageUrl }]);
+    rows.push([
+      { text: t("movies.detail.trailer", {}, locale), url: it.pageUrl },
+      { text: "💬 Subtitles", callback_data: packCb("msb", `${sessionId}:${idx}`, 1) },
+    ]);
   }
   rows.push([
     { text: t("music.detail.save", {}, locale), callback_data: packCb("mf", `${sessionId}:${idx}`, 1) },
     { text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) },
   ]);
+
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
+}
+
+export function renderSubtitleOptions(
+  sessionId: string,
+  idx: number,
+  title: string,
+  languages: CaptionLanguage[],
+  locale = "en",
+): FallbackMessage {
+  const lines = [
+    `💬 *Subtitles for ${escapeMd(title)}*`,
+    "",
+    languages.length
+      ? "Select a language to download the subtitle file (.srt):"
+      : "No embedded subtitles found for this source. You can still stream directly or search OpenSubtitles.",
+  ];
+
+  const rows: KbButton[][] = [];
+  for (let i = 0; i < languages.length; i += 2) {
+    const row: KbButton[] = [
+      {
+        text: languages[i].name || languages[i].language.toUpperCase(),
+        callback_data: packCb("msl", `${sessionId}:${idx}:${languages[i].language}`, 1),
+      },
+    ];
+    if (languages[i + 1]) {
+      row.push({
+        text: languages[i + 1].name || languages[i + 1].language.toUpperCase(),
+        callback_data: packCb("msl", `${sessionId}:${idx}:${languages[i + 1].language}`, 1),
+      });
+    }
+    rows.push(row);
+  }
+  rows.push([{ text: "‹ Back to Movie", callback_data: packCb("mo", `${sessionId}:${idx}`, 1) }]);
 
   return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }

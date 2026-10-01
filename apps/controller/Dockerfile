@@ -17,6 +17,7 @@ COPY packages/media-manifest/package.json packages/media-manifest/
 RUN npm ci --workspaces --include-workspace-root
 COPY apps/controller/ apps/controller/
 COPY packages/media-manifest/ packages/media-manifest/
+COPY telegram-versions.json ./
 RUN npm run build -w @pappy/media-manifest && npm run build -w @pappy/controller
 
 ENV NODE_ENV=production

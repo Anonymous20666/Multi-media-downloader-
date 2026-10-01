@@ -11,8 +11,15 @@ import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { Sender } from "./telegram/sender.js";
 import { createApiCall, setupBot } from "./bot/setup.js";
+import { DeliveryService } from "./bot/delivery.js";
 import { MusicFlow } from "./bot/music.js";
-import { FileIdCache, SearchSessions } from "./state/stores.js";
+import { UrlFlow } from "./bot/urls.js";
+import { LibraryFlow } from "./bot/library-flow.js";
+import { BanList, ForceJoin, Origins } from "./bot/guards.js";
+import { SettingsFlow } from "./bot/settings.js";
+import { OwnerFlow } from "./bot/owner.js";
+import { Library } from "./state/library.js";
+import { FileIdCache, ManifestSessions, SearchSessions, UserPrefs, UsersSeen } from "./state/stores.js";
 import { createHealthApp } from "./health.js";
 
 /**
@@ -53,16 +60,26 @@ async function main(): Promise<void> {
   } else {
     const adapter = new UmediaAdapter();
     const manager = new ProviderManager([adapter]);
-    const music = new MusicFlow({
-      manager,
-      adapter,
+    const fileIds = new FileIdCache();
+    const prefs = new UserPrefs();
+    const library = new Library();
+    const delivery = new DeliveryService({
       sender,
-      sessions: new SearchSessions(),
-      fileIds: new FileIdCache(),
+      fileIds,
       log,
       maxUploadBytes: maxUploadBytesFor(cfg.botApiRoot),
+      fetcher: (url, jobDir, hint) => adapter.fetchMediaUrl(url, jobDir, hint),
     });
-    const bot = setupBot(cfg, sender, log, music);
+    const music = new MusicFlow({ manager, sender, sessions: new SearchSessions(), delivery, prefs, library, log });
+    const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log);
+    const forcejoin = new ForceJoin(sender, log);
+    const bans = new BanList();
+    const origins = new Origins();
+    const seen = new UsersSeen();
+    const settings = new SettingsFlow(sender, prefs);
+    const libraryFlow = new LibraryFlow(sender, library, log);
+    const owner = new OwnerFlow(sender, manager, forcejoin, bans, seen, log);
+    const bot = setupBot(cfg, sender, log, { music, urls, libraryFlow, forcejoin, bans, origins, settings, owner, prefs, seen });
     log.info("starting bot (long-polling)", { localBotApi: Boolean(cfg.botApiRoot) });
     bot.start({ onStart: (me) => log.info("bot online", { username: me.username }) });
     const shutdown = async (sig: string) => {

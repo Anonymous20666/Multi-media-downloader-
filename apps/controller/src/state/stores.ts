@@ -37,4 +37,58 @@ export class FileIdCache {
   set(dedupeKey: string, fileId: string): void {
     this.cache.set(dedupeKey, fileId);
   }
+  get size(): number {
+    return this.cache.size;
+  }
+}
+
+/** Short-lived resolved manifests for URL sessions. TTL 30 min. */
+export class ManifestSessions {
+  private cache = new TtlCache<{ id: string; manifest: import("@pappy/media-manifest").MediaManifest }>(1000, 30 * 60_000);
+  private seq = 1;
+
+  create(manifest: import("@pappy/media-manifest").MediaManifest): { id: string } {
+    const id = `u${(this.seq++).toString(36)}${Date.now().toString(36).slice(-4)}`;
+    this.cache.set(id, { id, manifest });
+    return { id };
+  }
+
+  get(id: string): { id: string; manifest: import("@pappy/media-manifest").MediaManifest } | undefined {
+    return this.cache.get(id);
+  }
+}
+
+export interface UserPref {
+  verbose: boolean; // progress-stage edits on/off (real, enforced in flows)
+  quality: string; // STORED ONLY in slice 2 — enforced when variant-aware delivery lands
+  language: string; // "en" only until locales ship
+}
+
+/** Per-user preferences. PG-backed in V1.5+; memory tier proves the semantics. */
+export class UserPrefs {
+  private map = new Map<number, UserPref>();
+  get(userId: number): UserPref {
+    let p = this.map.get(userId);
+    if (!p) {
+      p = { verbose: true, quality: "best", language: "en" };
+      this.map.set(userId, p);
+    }
+    return p;
+  }
+  set(userId: number, patch: Partial<UserPref>): UserPref {
+    const p = { ...this.get(userId), ...patch };
+    this.map.set(userId, p);
+    return p;
+  }
+}
+
+/** Seen-user registry for the owner dashboard. */
+export class UsersSeen {
+  private set = new Set<number>();
+  record(userId: number): void {
+    this.set.add(userId);
+  }
+  get count(): number {
+    return this.set.size;
+  }
 }

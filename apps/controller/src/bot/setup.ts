@@ -2,6 +2,9 @@
  * Bot wiring (grammY for ingress, OUR sender for ALL egress — §57).
  * Rich methods (10.1–10.3) go over raw HTTPS because generated framework
  * typings lag new Bot API methods (X10/Q5). Any rich failure → fallback.
+ *
+ * V1 routes: music search, paste-a-link galleries, library, settings, owner.
+ * Provider-costing actions pass the gate (bans + force-join); local reads don't.
  */
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Config } from "../config.js";
@@ -11,6 +14,12 @@ import { FloodWait, RetryableUpstream, Sender, type ApiCall } from "../telegram/
 import { encodeParams } from "../telegram/uploads.js";
 import { renderHubFallback, renderHubRich, unpackCb } from "../ui/components.js";
 import type { MusicFlow } from "./music.js";
+import { isHttpUrl, type UrlFlow } from "./urls.js";
+import type { LibraryFlow } from "./library-flow.js";
+import { BanList, ForceJoin, Origins, renderJoinCard } from "./guards.js";
+import type { SettingsFlow } from "./settings.js";
+import { isOwner, type OwnerFlow } from "./owner.js";
+import { UserPrefs, UsersSeen } from "../state/stores.js";
 
 export function createApiCall(cfg: Config): ApiCall {
   const root = (cfg.botApiRoot ?? "https://api.telegram.org").replace(/\/$/, "");
@@ -37,15 +46,57 @@ export function createApiCall(cfg: Config): ApiCall {
   };
 }
 
-export function setupBot(cfg: Config, sender: Sender, log: Logger, music: MusicFlow): Bot {
+export interface BotFlows {
+  music: MusicFlow;
+  urls: UrlFlow;
+  libraryFlow: LibraryFlow;
+  forcejoin: ForceJoin;
+  bans: BanList;
+  origins: Origins;
+  settings: SettingsFlow;
+  owner: OwnerFlow;
+  prefs: UserPrefs;
+  seen: UsersSeen;
+}
+
+export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlows): Bot {
   if (!cfg.botToken) throw new Error("BOT_TOKEN required");
   const bot = new Bot(cfg.botToken, cfg.botApiRoot ? { client: { apiRoot: cfg.botApiRoot } } : {});
   const t0 = Date.now();
+  const ownerIds = cfg.ownerIds;
+
+  /** Provider-costing gate: bans + force-join (origin preserved across verify). */
+  async function gate(chatId: number, userId: number, kind: "music" | "url", query: string): Promise<boolean> {
+    if (flows.bans.isBanned(userId)) {
+      await sender.enqueue("sendMessage", { chat_id: chatId, text: t("fj.banned") }, "interactive").catch(() => {});
+      return false;
+    }
+    const res = await flows.forcejoin.check(userId);
+    if (res.ok) return true;
+    const oid = flows.origins.stash({ kind, query });
+    const card = renderJoinCard(res.missing, oid);
+    await sender.enqueue("sendMessage", { chat_id: chatId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup }, "interactive").catch(() => {});
+    return false;
+  }
+
+  async function denyIfBanned(chatId: number, userId: number): Promise<boolean> {
+    if (!flows.bans.isBanned(userId)) return false;
+    await sender.enqueue("sendMessage", { chat_id: chatId, text: t("fj.banned") }, "interactive").catch(() => {});
+    return true;
+  }
+
+  async function ownerOnly(chatId: number, userId: number): Promise<boolean> {
+    if (isOwner(ownerIds, userId)) return true;
+    await sender.enqueue("sendMessage", { chat_id: chatId, text: t("own.only") }, "interactive").catch(() => {});
+    return false;
+  }
+
+  const argText = (text: string, cmd: string): string => text.replace(new RegExp(`^/${cmd}(@\\w+)?\\s*`), "");
 
   bot.command("start", async (ctx) => {
     const chatId = ctx.chatId;
     if (!chatId) return;
-    // Try rich first, degrade to fallback on ANY error (X10). Log which rendered (Q4 telemetry).
+    if (ctx.from) flows.seen.record(ctx.from.id);
     try {
       await sender.enqueue("sendRichMessage", { chat_id: chatId, ...renderHubRich() }, "interactive");
       log.info("start rendered", { mode: "rich", chatId });
@@ -63,62 +114,296 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, music: MusicF
   });
 
   bot.command("music", async (ctx) => {
-    if (!ctx.chatId) return;
-    const q = (ctx.message?.text ?? "").replace(/^\/music(@\w+)?\s*/, "");
-    await music.search(ctx.chatId, q);
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    const q = argText(ctx.message?.text ?? "", "music");
+    if (!(await gate(ctx.chatId, ctx.from.id, "music", q))) return;
+    await flows.music.search(ctx.chatId, ctx.from.id, q);
+  });
+
+  bot.command("dl", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    const url = argText(ctx.message?.text ?? "", "dl");
+    if (!url) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("hub.hint.url") }, "interactive").catch(() => {});
+      return;
+    }
+    if (!(await gate(ctx.chatId, ctx.from.id, "url", url))) return;
+    await flows.urls.submit(ctx.chatId, ctx.from.id, url);
+  });
+
+  bot.command("playlist", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    await flows.libraryFlow.playlists(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("playlist_new", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    const title = argText(ctx.message?.text ?? "", "playlist_new").trim();
+    if (!title) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("lib.playlist.usage") }, "interactive").catch(() => {});
+      return;
+    }
+    await flows.libraryFlow.create(ctx.chatId, ctx.from.id, title);
+  });
+
+  bot.command("favorites", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    await flows.libraryFlow.favorites(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("history", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    await flows.libraryFlow.history(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("settings", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    await flows.settings.menu(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("admin", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    await flows.owner.dashboard(ctx.chatId);
+  });
+
+  bot.command("fj_add", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    const [tgId, invite, ...rest] = argText(ctx.message?.text ?? "", "fj_add").split(/\s+/).filter(Boolean);
+    if (!tgId || !invite || !rest.length) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.fj_help") }, "interactive").catch(() => {});
+      return;
+    }
+    const g = flows.forcejoin.add(tgId, rest.join(" "), invite);
+    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: `${t("own.done")} \`${g.id}\` ${g.title}` }, "interactive").catch(() => {});
+  });
+
+  bot.command("fj_del", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    const id = argText(ctx.message?.text ?? "", "fj_del").trim();
+    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: flows.forcejoin.remove(id) ? t("own.done") : t("own.nope") }, "interactive").catch(() => {});
+  });
+
+  bot.command("fj_toggle", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    const g = flows.forcejoin.toggle(argText(ctx.message?.text ?? "", "fj_toggle").trim());
+    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: g ? `${t("own.done")} ${g.title}: ${g.enabled ? "on" : "off"}` : t("own.nope") }, "interactive").catch(() => {});
+  });
+
+  bot.command("ban", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    const id = Number(argText(ctx.message?.text ?? "", "ban").trim());
+    if (!Number.isInteger(id)) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.users_help") }, "interactive").catch(() => {});
+      return;
+    }
+    flows.bans.ban(id);
+    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.done") }, "interactive").catch(() => {});
+  });
+
+  bot.command("unban", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    const id = Number(argText(ctx.message?.text ?? "", "unban").trim());
+    if (!Number.isInteger(id)) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.users_help") }, "interactive").catch(() => {});
+      return;
+    }
+    flows.bans.unban(id);
+    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.done") }, "interactive").catch(() => {});
   });
 
   bot.on("callback_query:data", async (ctx) => {
     const parsed = unpackCb(ctx.callbackQuery.data);
     const cqId = ctx.callbackQuery.id;
-    // Acks ride the control lane (fast, still throttled — never a retry storm).
-    await sender.enqueue("answerCallbackQuery", { callback_query_id: cqId }, "control").catch(() => {});
-    if (!parsed || !ctx.chatId) return;
+    const userId = ctx.from.id;
+    flows.seen.record(userId);
+    // Toast actions answer with text; everything else gets a bare ack at the end.
+    // (Telegram honors ONE answer per query — never pre-ack before the switch.)
+    let answered = false;
+    const toast = (text: string) => {
+      answered = true;
+      return sender.enqueue("answerCallbackQuery", { callback_query_id: cqId, text: text.slice(0, 200), show_alert: false }, "control").catch(() => {});
+    };
+    if (flows.bans.isBanned(userId)) {
+      await toast(t("fj.banned"));
+      return;
+    }
+    if (!parsed || !ctx.chatId) return; // bare ack below
+    const chatId = ctx.chatId;
     const messageId = ctx.callbackQuery.message?.message_id;
-    if (parsed.action === "ms" && messageId) {
-      await music.select(ctx.chatId, messageId, parsed.target);
-      return;
+    try {
+      switch (parsed.action) {
+        case "ms":
+          if (messageId) await flows.music.select(chatId, messageId, parsed.target);
+          break;
+        case "md":
+          if (messageId) await flows.music.download(chatId, messageId, userId, parsed.target);
+          break;
+        case "mx":
+          if (messageId) await flows.music.cancel(chatId, messageId);
+          break;
+        case "mq":
+          await toast(flows.music.queue(userId, parsed.target) ? t("music.queue.added") : t("music.session.expired"));
+          break;
+        case "mf":
+          await toast(flows.music.save(userId, parsed.target) ? t("music.saved") : t("music.session.expired"));
+          break;
+        case "us":
+          if (messageId) await flows.urls.download(chatId, messageId, userId, parsed.target);
+          break;
+        case "ub":
+          if (messageId) await flows.urls.back(chatId, messageId, parsed.target);
+          break;
+        case "ua":
+          if (messageId) {
+            await toast(t("url.batch.start"));
+            await flows.urls.downloadAll(chatId, messageId, userId, parsed.target);
+          }
+          break;
+        case "pl":
+          if (messageId) await flows.libraryFlow.view(chatId, messageId, userId, parsed.target);
+          break;
+        case "pr":
+          if (messageId) await flows.libraryFlow.removeItem(chatId, messageId, userId, parsed.target);
+          break;
+        case "pb":
+          if (messageId) await flows.libraryFlow.back(chatId, messageId, userId);
+          break;
+        case "fr":
+          if (messageId) await flows.libraryFlow.unfav(chatId, messageId, userId, parsed.target);
+          break;
+        case "fj":
+          if (!messageId) break;
+          await handleVerify(chatId, messageId, userId, parsed.target);
+          break;
+        case "sv":
+          if (messageId) {
+            flows.settings.toggleVerbose(userId);
+            await flows.settings.editMenu(chatId, messageId, userId);
+          }
+          break;
+        case "sq":
+          if (messageId) {
+            flows.settings.cycleQuality(userId);
+            await flows.settings.editMenu(chatId, messageId, userId);
+          }
+          break;
+        case "sl":
+          await toast(t("set.lang_note"));
+          break;
+        case "po":
+          if (!isOwner(ownerIds, userId)) {
+            await toast(t("own.only"));
+            break;
+          }
+          if (messageId) await flows.owner.providers(chatId, messageId);
+          break;
+        case "pt":
+          if (!isOwner(ownerIds, userId)) {
+            await toast(t("own.only"));
+            break;
+          }
+          if (messageId) await flows.owner.toggleProvider(chatId, messageId, userId, parsed.target);
+          break;
+        case "pf":
+          if (!isOwner(ownerIds, userId)) {
+            await toast(t("own.only"));
+            break;
+          }
+          await flows.owner.fjAdmin(chatId);
+          break;
+        case "pu":
+          if (!isOwner(ownerIds, userId)) {
+            await toast(t("own.only"));
+            break;
+          }
+          await flows.owner.users(chatId);
+          break;
+        case "hub":
+          if (messageId) await handleHub(chatId, messageId, userId, parsed.target);
+          break;
+        default:
+          break;
+      }
+    } finally {
+      if (!answered) await sender.enqueue("answerCallbackQuery", { callback_query_id: cqId }, "control").catch(() => {});
     }
-    if (parsed.action === "md" && messageId) {
-      await music.download(ctx.chatId, messageId, parsed.target);
-      return;
+
+    async function handleVerify(chatId: number, messageId: number, userId: number, originId: string): Promise<void> {
+      const res = await flows.forcejoin.verify(userId);
+      if (res.ok) {
+        const origin = flows.origins.pop(originId);
+        await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("fj.verified") }, "interactive").catch(() => {});
+        if (!origin) {
+          await toast(t("fj.expired"));
+          return;
+        }
+        await toast(t("fj.verified"));
+        if (origin.kind === "music") await flows.music.search(chatId, userId, origin.query);
+        else await flows.urls.submit(chatId, userId, origin.query);
+      } else {
+        const card = renderJoinCard(res.missing, originId);
+        await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup }, "interactive").catch(() => {});
+        await toast(t("fj.still_missing"));
+      }
     }
-    if (parsed.action === "mx" && messageId) {
-      await music.cancel(ctx.chatId, messageId);
-      return;
-    }
-    if (parsed.action === "mq") {
-      await sender.enqueue("answerCallbackQuery", { callback_query_id: cqId, text: t("music.queue.soon"), show_alert: false }, "control").catch(() => {});
-      return;
-    }
-    if (!ctx.callbackQuery.message) return;
-    // Hub sections render honest scope cards until their slice lands.
-    if (parsed.action === "hub") {
-      const label = parsed.target;
-      await sender.enqueue(
-        "editMessageText",
-        {
-          chat_id: ctx.chatId,
-          message_id: ctx.callbackQuery.message.message_id,
-          text: `*${label}*\n\nLands in V1 — the Foundation build proves delivery, throttling, and UI. Back to /start for the hub.`,
-          parse_mode: "Markdown",
-          reply_markup: { inline_keyboard: [[{ text: "‹ Back", callback_data: "v1.hub.back.1.zzzzzz" }]] },
-        },
-        "interactive",
-      ).catch((e) => log.warn("section edit failed", { error: (e as Error).message }));
+
+    async function handleHub(chatId: number, messageId: number, userId: number, section: string): Promise<void> {
+      if (section === "settings") {
+        await flows.settings.menu(chatId, userId);
+        return;
+      }
+      const hint = section === "music" ? t("hub.hint.music") : section === "url" ? t("hub.hint.url") : t("hub.hint.soon");
+      await sender
+        .enqueue(
+          "editMessageText",
+          {
+            chat_id: chatId,
+            message_id: messageId,
+            text: hint,
+            reply_markup: { inline_keyboard: [[{ text: t("common.back"), callback_data: "v1.hub.back.1.zzzzzz" }]] },
+          },
+          "interactive",
+        )
+        .catch((e) => log.warn("section edit failed", { error: (e as Error).message }));
+      if (section === "back") {
+        const fb = renderHubFallback();
+        await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive").catch(() => {});
+      }
     }
   });
 
   bot.on("message:text", async (ctx) => {
-    if (ctx.message.text.startsWith("/")) return; // unknown command — ignore quietly
-    if (ctx.chat?.type !== "private" || !ctx.chatId) return;
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
     const text = ctx.message.text.trim();
-    // Slice 1: free text = music search. URL flow + disambiguation land in slice 2.
-    if (/^https?:\/\//i.test(text)) {
-      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("music.url.soon") }, "interactive").catch(() => {});
+    if (text.startsWith("/")) return; // unknown command — ignore quietly
+    if (ctx.chat?.type !== "private") return;
+    if (isHttpUrl(text)) {
+      if (!(await gate(ctx.chatId, ctx.from.id, "url", text))) return;
+      await flows.urls.submit(ctx.chatId, ctx.from.id, text);
       return;
     }
-    await music.search(ctx.chatId, text);
+    if (!(await gate(ctx.chatId, ctx.from.id, "music", text))) return;
+    await flows.music.search(ctx.chatId, ctx.from.id, text);
   });
 
   bot.catch((err) => {

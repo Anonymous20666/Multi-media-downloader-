@@ -39,7 +39,10 @@ export function renderMusicDetail(sessionId: string, idx: number, it: SearchItem
           { text: t("music.detail.download", {}, locale), callback_data: packCb("md", `${sessionId}:${idx}`, 1) },
           { text: t("music.detail.queue", {}, locale), callback_data: packCb("mq", `${sessionId}:${idx}`, 1) },
         ],
-        [{ text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) }],
+        [
+          { text: t("music.detail.save", {}, locale), callback_data: packCb("mf", `${sessionId}:${idx}`, 1) },
+          { text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) },
+        ],
       ],
     },
   };

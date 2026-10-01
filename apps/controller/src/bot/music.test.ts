@@ -1,173 +1,112 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import test from "node:test";
-import type { ProviderManager, SearchItem, UmediaAdapter } from "@pappy/media-manifest";
+import type { ProviderManager, SearchItem } from "@pappy/media-manifest";
 import type { Sender } from "../telegram/sender.js";
 import { createLogger } from "../logger.js";
-import { FileIdCache, SearchSessions } from "../state/stores.js";
+import { Library } from "../state/library.js";
+import { SearchSessions, UserPrefs } from "../state/stores.js";
+import type { DeliveryService } from "./delivery.js";
 import { MusicFlow } from "./music.js";
 
-interface Call {
-  method: string;
-  params: Record<string, unknown>;
-}
+const ITEMS: SearchItem[] = [
+  { id: "a1", title: "Fall Back", author: "Lithe", pageUrl: "https://music.example/t/1", duration: 187 },
+  { id: "a2", title: "No Source", author: "Ghost", pageUrl: null },
+];
 
-function fakeSender(): { sender: Sender; outbox: Call[]; nextId: { n: number } } {
-  const outbox: Call[] = [];
-  const nextId = { n: 100 };
+function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (chatId: number, o: Record<string, unknown>) => unknown } = {}) {
+  const calls: Array<{ method: string; text: string; kb: string }> = [];
+  let mid = 100;
   const sender = {
     enqueue: async (method: string, params: Record<string, unknown>) => {
-      outbox.push({ method, params });
-      if (method === "sendMessage") return { message_id: nextId.n++ };
-      if (method === "sendAudio") {
-        if (typeof params["audio"] === "string") return { message_id: nextId.n++, audio: { file_id: params["audio"] } };
-        return { message_id: nextId.n++, audio: { file_id: "FILE_NEW_1" } };
-      }
-      return { ok: true };
+      calls.push({ method, text: String(params["text"] ?? params["caption"] ?? ""), kb: JSON.stringify(params["reply_markup"] ?? {}) });
+      return method === "sendMessage" ? { message_id: ++mid } : { ok: true };
     },
   } as unknown as Sender;
-  return { sender, outbox, nextId };
-}
-
-function items(): SearchItem[] {
-  return [
-    { id: "sc:1", title: "Lithe", author: "Lithe", pageUrl: "https://soundcloud.com/lithe/lithe", duration: 168, previewKind: "full_track" },
-    { id: "sc:2", title: "Lithe (sped up)", author: "fan", pageUrl: "https://soundcloud.com/fan/x", duration: 150, previewKind: "full_track" },
-  ];
-}
-
-function fakeManager(mode: { empty?: boolean; noUrl?: boolean; noMedia?: boolean } = {}): ProviderManager {
-  return {
-    async searchMusic(q: string) {
-      return { items: mode.empty ? [] : items(), attempts: [], shared: false };
-    },
-    async resolve() {
-      if (mode.noMedia) {
-        return { manifest: { v: "1", platform: "x", contentType: "single", sourceUrl: "u", dedupeKey: "k", truncated: false, media: [] }, attempts: [], shared: false };
-      }
-      return {
-        manifest: {
-          v: "1", platform: "soundcloud", contentType: "single", sourceUrl: "u",
-          dedupeKey: "dk1", truncated: false,
-          media: [{ type: "audio", index: 0, url: "https://cf.fake/audio.mp3", quality: null }],
-        },
-        attempts: [], shared: false,
-      };
-    },
+  const manager = {
+    searchMusic: async () => ({ items: ITEMS, attempts: [] }),
+    resolve: async (url: string) =>
+      opts.resolveImpl
+        ? opts.resolveImpl(url)
+        : { manifest: { dedupeKey: "m1", title: "Fall Back", media: [{ type: "audio", index: 0, url: "https://cdn/x.mp3" }] }, attempts: [] },
   } as unknown as ProviderManager;
-}
-
-function fakeAdapter(fetched: { bytes: number; record: string[] }): UmediaAdapter {
-  return {
-    async fetchMediaUrl(url: string, jobDir: string, title: string) {
-      fetched.record.push(url);
-      const p = path.join(jobDir, "001 - t.mp3");
-      await writeFile(p, Buffer.alloc(fetched.bytes, 0xab));
-      return { path: p, bytes: fetched.bytes, finalUrl: url, mimeType: "audio/mpeg" };
+  const delivered: Array<Record<string, unknown>> = [];
+  const delivery = {
+    deliver: async (chatId: number, o: Record<string, unknown>) => {
+      delivered.push({ chatId, ...o });
+      return opts.deliverImpl ? opts.deliverImpl(chatId, o) : { status: "sent", cached: false, fileId: "f1" };
     },
-  } as unknown as UmediaAdapter;
+  } as unknown as DeliveryService;
+  const sessions = new SearchSessions();
+  const prefs = new UserPrefs();
+  const library = new Library();
+  const flow = new MusicFlow({ manager, sender, sessions, delivery, prefs, library, log: createLogger("error") });
+  return { calls, delivered, flow, library, prefs, sessions };
 }
 
-async function harness(mode: { maxUploadBytes?: number; fetchBytes?: number; manager?: ReturnType<typeof fakeManager>; noPageUrl?: boolean } = {}) {
-  const { sender, outbox } = fakeSender();
-  const fetched = { bytes: mode.fetchBytes ?? 1024, record: [] as string[] };
-  const manager = mode.manager ?? fakeManager();
-  if (mode.noPageUrl) {
-    const orig = manager.searchMusic.bind(manager);
-    (manager as { searchMusic: unknown }).searchMusic = async (q: string, l: number) => {
-      const r = await orig(q, l);
-      r.items[0].pageUrl = null;
-      return r;
-    };
-  }
-  const flow = new MusicFlow({
-    manager,
-    adapter: fakeAdapter(fetched),
-    sender,
-    sessions: new SearchSessions(),
-    fileIds: new FileIdCache(),
-    log: createLogger("error"),
-    maxUploadBytes: mode.maxUploadBytes ?? 48 * 1024 * 1024,
-  });
-  return { flow, outbox, fetched };
+function sidOf(calls: Array<{ kb: string }>): string {
+  const m = /v1\.ms\.([a-z0-9]+):0\./.exec(calls.map((c) => c.kb).join(" "));
+  assert.ok(m, "expected an ms button with session id");
+  return m[1];
 }
 
-function lastEdit(outbox: Call[]): string {
-  const edits = outbox.filter((c) => c.method === "editMessageText");
-  return String(edits[edits.length - 1].params["text"]);
-}
+test("music search: verbose narrates, quiet goes straight to results", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  assert.match(h.calls[0].text, /Searching/);
+  assert.match(h.calls[1].text, /Fall Back/);
+  assert.match(h.calls[1].kb, /v1\.ms\./);
+  assert.deepEqual(h.library.history(9001).searches, ["lithe"]);
 
-function sessionTarget(outbox: Call[]): string {
-  const kbd = (outbox.find((c) => c.method === "editMessageText" && (c.params["reply_markup"] as { inline_keyboard?: unknown[][] })?.inline_keyboard)?.params["reply_markup"] as {
-    inline_keyboard: Array<Array<{ callback_data: string }>>;
-  }).inline_keyboard[0][0].callback_data;
-  const m = /^v1\.ms\.([^.]+)\.\d+\.[a-z0-9]{6}$/.exec(kbd);
-  return m![1]; // "<sessionId>:<idx>"
-}
-
-test("music search → results card with tappable rows", async () => {
-  const { flow, outbox } = await harness();
-  await flow.search(1, "lithe");
-  assert.equal(outbox[0].method, "sendMessage");
-  assert.match(String(outbox[0].params["text"]), /Searching/);
-  const text = lastEdit(outbox);
-  assert.match(text, /Lithe/);
-  assert.match(text, /sped up/);
-  assert.ok(sessionTarget(outbox).endsWith(":0"));
+  const q = harness();
+  q.prefs.set(9002, { verbose: false });
+  await q.flow.search(7, 9002, "lithe");
+  assert.equal(q.calls.length, 1);
+  assert.equal(q.calls[0].method, "sendMessage");
+  assert.match(q.calls[0].text, /Fall Back/);
 });
 
-test("select → detail card; empty search → honest error card", async () => {
-  const { flow, outbox } = await harness();
-  await flow.search(1, "lithe");
-  await flow.select(1, 100, sessionTarget(outbox));
-  const detail = outbox.filter((c) => c.method === "editMessageText").pop()!;
-  assert.match(String(detail.params["text"]), /Lithe/);
-  const btns = JSON.stringify(detail.params["reply_markup"]);
-  assert.match(btns, /Download/);
-  assert.match(btns, /v1\.md\./);
-  const h2 = await harness({ manager: fakeManager({ empty: true }) });
-  await h2.flow.search(1, "zzz-no-such-song");
-  assert.match(lastEdit(h2.outbox), /No results/);
+test("music select: detail card carries download + save; expired sessions say so", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  const sid = sidOf(h.calls);
+  await h.flow.select(7, 50, `${sid}:0`);
+  const detail = h.calls[h.calls.length - 1];
+  assert.match(detail.text, /Fall Back/);
+  assert.match(detail.kb, /v1\.md\./);
+  assert.match(detail.kb, /v1\.mf\./);
+  await h.flow.select(7, 50, "dead:0");
+  assert.match(h.calls[h.calls.length - 1].text, /expired/);
 });
 
-test("download → guarded fetch → sendAudio → receipt; second run uses file_id", async () => {
-  const { flow, outbox, fetched } = await harness();
-  await flow.search(1, "lithe");
-  const target = sessionTarget(outbox);
-  await flow.download(1, 100, target);
-  const audio = outbox.find((c) => c.method === "sendAudio")!;
-  assert.ok(audio, "sendAudio called");
-  assert.equal((audio.params["audio"] as { __upload: { filename: string } }).__upload.filename, "001 - t.mp3");
-  assert.equal(audio.params["title"], "Lithe");
-  assert.deepEqual(fetched.record, ["https://cf.fake/audio.mp3"]);
-  assert.match(lastEdit(outbox), /Ready/);
-
-  // Second download of the same item: file_id fast path, no fetch.
-  const n = outbox.length;
-  await flow.download(1, 100, target);
-  assert.equal(fetched.record.length, 1);
-  const audio2 = outbox.slice(n).find((c) => c.method === "sendAudio")!;
-  assert.equal(audio2.params["audio"], "FILE_NEW_1");
+test("music download: delivery receipt + history; missing source is honest", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  const sid = sidOf(h.calls);
+  await h.flow.download(7, 60, 9001, `${sid}:0`);
+  assert.equal(h.delivered.length, 1);
+  assert.deepEqual([h.delivered[0]["key"], h.delivered[0]["kind"]], ["m1:audio", "audio"]);
+  assert.match(h.calls[h.calls.length - 1].text, /Ready/);
+  assert.deepEqual(h.library.history(9001).downloads, ["Fall Back"]);
+  await h.flow.download(7, 60, 9001, `${sid}:1`);
+  assert.match(h.calls[h.calls.length - 1].text, /didn't expose/);
 });
 
-test("oversize file → honest too-large card, nothing uploaded", async () => {
-  const { flow, outbox, fetched } = await harness({ fetchBytes: 2048, maxUploadBytes: 1024 });
-  await flow.search(1, "lithe");
-  await flow.download(1, 100, sessionTarget(outbox));
-  assert.ok(!outbox.some((c) => c.method === "sendAudio"));
-  assert.match(lastEdit(outbox), /too large/i);
-  assert.equal(fetched.record.length, 1);
+test("music download maps auth-gated resolve to the gated card", async () => {
+  const h = harness({ resolveImpl: () => { throw Object.assign(new Error("denied"), { code: "AUTH_REQUIRED" }); } });
+  await h.flow.search(7, 9001, "lithe");
+  const sid = sidOf(h.calls);
+  await h.flow.download(7, 60, 9001, `${sid}:0`);
+  assert.match(h.calls[h.calls.length - 1].text, /withheld/);
+  assert.equal(h.delivered.length, 0);
 });
 
-test("missing pageUrl / gated media → honest cards, no crash", async () => {
-  const h1 = await harness({ noPageUrl: true });
-  await h1.flow.search(1, "lithe");
-  await h1.flow.download(1, 100, sessionTarget(h1.outbox));
-  assert.match(lastEdit(h1.outbox), /didn't expose|Failed/);
-
-  const h2 = await harness({ manager: fakeManager({ noMedia: true }) });
-  await h2.flow.search(1, "lithe");
-  await h2.flow.download(1, 100, sessionTarget(h2.outbox));
-  assert.match(lastEdit(h2.outbox), /Failed/);
+test("music save: queue + favorites; dead session returns false", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  const sid = sidOf(h.calls);
+  assert.equal(h.flow.save(9001, `${sid}:0`), true);
+  assert.equal(h.library.list(9001)[0].items.length, 1);
+  assert.equal(h.library.listFavs(9001).length, 1);
+  assert.equal(h.flow.save(9001, "dead:0"), false);
+  assert.equal(h.flow.save(9001, `${sid}:1`), false); // no pageUrl → not saveable
 });

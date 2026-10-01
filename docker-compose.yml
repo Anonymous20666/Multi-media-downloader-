@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pappy
+      POSTGRES_PASSWORD: pappy
+      POSTGRES_DB: pappy
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pappy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Local Bot API server — ADR-04. 2000MB uploads, unlimited downloads.
+  # Requires TELEGRAM_API_ID / TELEGRAM_API_HASH from https://my.telegram.org
+  botapi:
+    image: tdlib/telegram-bot-api:latest
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env (my.telegram.org)}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env (my.telegram.org)}
+    volumes:
+      - botapidata:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8081/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  controller:
+    build:
+      context: .
+      dockerfile: apps/controller/Dockerfile
+    env_file: [.env]
+    environment:
+      BOT_API_ROOT: http://botapi:8081
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://pappy:pappy@postgres:5432/pappy
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  botapidata:

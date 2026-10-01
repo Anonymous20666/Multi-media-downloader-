@@ -1,0 +1,14 @@
+{
+  "comment": "Single source of truth for Telegram dependency versions (§103). Bumps require an ADR entry.",
+  "botApi": { "version": "10.3", "released": "2026-08-24", "changelog": "https://core.telegram.org/bots/api-changelog" },
+  "mtprotoLayer": { "approx": 158, "note": "From Pyrogram raw docs at audit time; re-check on library bump" },
+  "engines": {
+    "ntgcalls": { "series": "2.x", "status": "active Sep 2026" },
+    "pappy-media-api": { "pinned": "0.6.7", "note": "ADR-05: adopt with guardrails; P0 SSRF fixed at our layer, upstream fix pending" }
+  },
+  "processes": {
+    "botApiChangelogWatch": "monthly",
+    "mtprotoLayerReview": "quarterly",
+    "ytdlpPinReview": "weekly"
+  }
+}

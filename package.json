@@ -1,0 +1,16 @@
+{
+  "name": "pappy-omega",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/controller", "packages/media-manifest"],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run build -w @pappy/media-manifest && npm run test --workspaces",
+    "dev": "npm run dev -w @pappy/controller"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

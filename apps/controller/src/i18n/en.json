@@ -1,0 +1,22 @@
+{
+  "start.hub.title": "Pappy — your Telegram media assistant",
+  "start.hub.body": "Send me anything — a song name, movie title, link, photo, or voice note.",
+  "start.hub.music": "🎵 Music",
+  "start.hub.movies": "🎬 Movies",
+  "start.hub.series": "📺 Series",
+  "start.hub.search": "🔎 Search",
+  "start.hub.url": "🔗 Download link",
+  "start.hub.ask": "🤖 Ask Pappy",
+  "start.hub.stream": "📡 Stream",
+  "start.hub.settings": "⚙️ Settings",
+  "start.hub.hint": "Tip: just type what you want. No commands to memorize.",
+  "ping.pong": "pong",
+  "error.generic": "Something went wrong on our side. Try again in a moment.",
+  "op.searching": "🔎 Searching…",
+  "op.found": "⚡ Found",
+  "op.preparing": "📥 Preparing…",
+  "op.downloading": "🎵 Downloading…",
+  "op.uploading": "📤 Uploading…",
+  "op.ready": "✅ Ready",
+  "op.failed": "❌ Failed"
+}

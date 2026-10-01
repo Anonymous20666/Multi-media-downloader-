@@ -1,0 +1,4 @@
+# Pinned at the V1.5 spike (ADR-02 / Q5). Placeholders only — do not install yet.
+# pyrofork==x.y.z
+# pytgcalls==x.y.z
+# ntgcalls==x.y.z

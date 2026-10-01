@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.local
+data/
+*.tgz
+out/
+pappy-media-downloads/
+coverage/
+.DS_Store

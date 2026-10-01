@@ -103,9 +103,9 @@ async function main(): Promise<void> {
     const movies = new MovieFlow({ adapter, sender, sessions, delivery, presence, prefs, library, log });
     const grabSessions = new GrabSessions();
     const grab = new GrabFlow({ adapter, sender, sessions: grabSessions, delivery, presence, log });
-    const seenChats = new SeenChats();
-    const dm = new DmRouter(music, prefs, new PendingQueries(), sessions, seenChats, sender, log, movies);
     const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log, presence, share, cancels);
+    const seenChats = new SeenChats();
+    const dm = new DmRouter(music, prefs, new PendingQueries(), sessions, seenChats, sender, log, movies, urls);
     const forcejoin = new ForceJoin(sender, log);
     const bans = new BanList();
     const origins = new Origins();

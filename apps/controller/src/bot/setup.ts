@@ -344,6 +344,20 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.done") }, "interactive").catch(() => {});
   });
 
+  bot.command("broadcast", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    const msg = argText(ctx.message?.text ?? "", "broadcast");
+    await flows.owner.broadcast(ctx.chatId, msg);
+  });
+
+  bot.command(["sysinfo", "status"], async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    if (!(await ownerOnly(ctx.chatId, ctx.from.id))) return;
+    await flows.owner.sysinfo(ctx.chatId);
+  });
+
+
   // --- V1.5 alpha: group-call DJ (gates live in the flow: group → flagged → admin → worker) ---
   bot.command("play", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;

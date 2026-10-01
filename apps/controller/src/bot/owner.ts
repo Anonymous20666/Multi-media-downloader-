@@ -92,4 +92,51 @@ export class OwnerFlow {
     const lines = [`*${t("own.users", {}, locale)}*`, "", `👥 ${this.seen.count} · 🚫 ${this.bans.count}`, "", t("own.users_help", {}, locale)];
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "Markdown" }, "interactive");
   }
+
+  async broadcast(chatId: number, messageText: string, locale = "en"): Promise<void> {
+    const text = messageText.trim();
+    if (!text) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: "⚠️ Usage: `/broadcast <message text>`" }, "interactive");
+      return;
+    }
+    const users = this.seen.list();
+    if (!users.length) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: "No users recorded yet to broadcast to." }, "interactive");
+      return;
+    }
+    let dispatched = 0;
+    for (const uid of users) {
+      if (this.bans.isBanned(uid)) continue;
+      await this.sender.enqueue("sendMessage", { chat_id: uid, text, parse_mode: "Markdown" }, "background").catch(() => {});
+      dispatched++;
+    }
+    await this.sender.enqueue(
+      "sendMessage",
+      { chat_id: chatId, text: `📢 Broadcast dispatched to *${dispatched}* user(s) in background lane.`, parse_mode: "Markdown" },
+      "interactive",
+    );
+  }
+
+  async sysinfo(chatId: number, locale = "en"): Promise<void> {
+    const mem = process.memoryUsage();
+    const formatMb = (b: number) => `${(b / (1024 * 1024)).toFixed(1)} MB`;
+    const uptimeMins = Math.floor(process.uptime() / 60);
+    const uptimeHrs = Math.floor(uptimeMins / 60);
+    const uptimeStr = uptimeHrs > 0 ? `${uptimeHrs}h ${uptimeMins % 60}m` : `${uptimeMins}m`;
+
+    const text = [
+      `*⚙️ System & Runtime Diagnostics*`,
+      "",
+      `⏱ *Uptime:* ${uptimeStr}`,
+      `🧠 *Heap Used:* ${formatMb(mem.heapUsed)} / ${formatMb(mem.heapTotal)}`,
+      `📦 *RSS:* ${formatMb(mem.rss)}`,
+      `👥 *Users Seen:* ${this.seen.count}`,
+      `🚫 *Bans Active:* ${this.bans.count}`,
+      `🔌 *Providers Total:* ${this.manager.health().length}`,
+      `⚡ *Node Version:* ${process.version}`,
+    ].join("\n");
+
+    await this.sender.enqueue("sendMessage", { chat_id: chatId, text, parse_mode: "Markdown" }, "interactive");
+  }
 }
+

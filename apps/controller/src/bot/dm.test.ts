@@ -103,3 +103,22 @@ test("dm streamIt names the track and seen groups, or explains the gap", async (
   await h.dm.streamIt(1, `${s.id}:1`);
   assert.match(h.calls[h.calls.length - 1].text, /Party Room/);
 });
+
+test("dm detectIntent: parses natural language into structured actions", async () => {
+  const { detectIntent } = await import("./dm.js");
+  assert.deepEqual(detectIntent("play Lithe"), { intent: "music", query: "Lithe" });
+  assert.deepEqual(detectIntent("listen to Drake"), { intent: "music", query: "Drake" });
+  assert.deepEqual(detectIntent("song Starboy"), { intent: "music", query: "Starboy" });
+  assert.deepEqual(detectIntent("watch Interstellar"), { intent: "movie", query: "Interstellar" });
+  assert.deepEqual(detectIntent("movie Oppenheimer"), { intent: "movie", query: "Oppenheimer" });
+  assert.deepEqual(detectIntent("anime Jujutsu Kaisen"), { intent: "movie", query: "Jujutsu Kaisen" });
+  assert.deepEqual(detectIntent("https://instagram.com/p/123"), { intent: "url", query: "https://instagram.com/p/123" });
+  assert.deepEqual(detectIntent("download https://vm.tiktok.com/abc"), { intent: "url", query: "https://vm.tiktok.com/abc" });
+  assert.deepEqual(detectIntent("Ariana Grande"), { intent: "ask", query: "Ariana Grande" });
+
+  const h = harness();
+  // "play Lithe" should bypass ask mode even when dmMode is ask
+  await h.dm.routeText(1, 7, "play Lithe");
+  assert.ok(h.calls.some((c) => /v1\.o1\./.test(c.kb)), "music search was triggered directly");
+});
+

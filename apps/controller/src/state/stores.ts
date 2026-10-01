@@ -126,7 +126,11 @@ export class UsersSeen {
   get count(): number {
     return this.set.size;
   }
+  list(): number[] {
+    return [...this.set];
+  }
 }
+
 
 /** Seen-group registry (id → title): powers stream-it cards + owner console. */
 export class SeenChats {

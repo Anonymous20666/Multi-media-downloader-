@@ -29,9 +29,44 @@ export function renderDisambiguation(query: string, qid: string, locale = "en"):
   };
 }
 
+export function detectIntent(text: string): { intent: "music" | "movie" | "url" | "ask"; query: string } {
+  const trimmed = text.trim();
+
+  // Natural language URL / download intent
+  const urlMatch = /(https?:\/\/[^\s]+)/i.exec(trimmed);
+  if (urlMatch) {
+    return { intent: "url", query: urlMatch[1]! };
+  }
+
+  // Explicit movie / film / watch / series prefixes
+  const moviePrefixes = [
+    /^(?:watch|movie|film|series|cinema|anime|show)\s+(.+)$/i,
+    /^(?:find|search)\s+(?:a\s+)?(?:movie|film|series|anime|cinema)\s+(.+)$/i,
+    /^(?:find|search)\s+(.+)\s+(?:movie|film|series|anime)$/i,
+  ];
+  for (const rx of moviePrefixes) {
+    const m = rx.exec(trimmed);
+    if (m?.[1]) return { intent: "movie", query: m[1].trim() };
+  }
+
+  // Explicit music / play / song / track / audio prefixes
+  const musicPrefixes = [
+    /^(?:play|listen(?:\s+to)?|song|track|audio|sing)\s+(.+)$/i,
+    /^(?:find|search)\s+(?:a\s+)?(?:song|track|music|audio)\s+(.+)$/i,
+    /^(?:find|search)\s+(.+)\s+(?:song|track|music)$/i,
+  ];
+  for (const rx of musicPrefixes) {
+    const m = rx.exec(trimmed);
+    if (m?.[1]) return { intent: "music", query: m[1].trim() };
+  }
+
+  return { intent: "ask", query: trimmed };
+}
+
 export class DmRouter {
   private music: MusicFlow;
   private movies?: import("./movies.js").MovieFlow;
+  private urls?: import("./urls.js").UrlFlow;
   private prefs: UserPrefs;
   private pending: PendingQueries;
   private sessions: SearchSessions;
@@ -39,9 +74,20 @@ export class DmRouter {
   private sender: Sender;
   private log: Logger;
 
-  constructor(music: MusicFlow, prefs: UserPrefs, pending: PendingQueries, sessions: SearchSessions, seenChats: SeenChats, sender: Sender, log: Logger, movies?: import("./movies.js").MovieFlow) {
+  constructor(
+    music: MusicFlow,
+    prefs: UserPrefs,
+    pending: PendingQueries,
+    sessions: SearchSessions,
+    seenChats: SeenChats,
+    sender: Sender,
+    log: Logger,
+    movies?: import("./movies.js").MovieFlow,
+    urls?: import("./urls.js").UrlFlow,
+  ) {
     this.music = music;
     this.movies = movies;
+    this.urls = urls;
     this.prefs = prefs;
     this.pending = pending;
     this.sessions = sessions;
@@ -52,6 +98,20 @@ export class DmRouter {
 
   /** DM free-text entry (after the gate). */
   async routeText(chatId: number, userId: number, text: string, replyTo?: number, locale = "en"): Promise<void> {
+    const detected = detectIntent(text);
+    if (detected.intent === "music") {
+      await this.runMode(chatId, userId, "music", detected.query, replyTo, locale);
+      return;
+    }
+    if (detected.intent === "movie" && this.movies) {
+      await this.runMode(chatId, userId, "movie", detected.query, replyTo, locale);
+      return;
+    }
+    if (detected.intent === "url" && this.urls) {
+      await this.urls.submit(chatId, userId, detected.query, locale, replyTo);
+      return;
+    }
+
     const mode = this.prefs.get(userId).dmMode;
     if (mode !== "ask") {
       await this.runMode(chatId, userId, mode, text, replyTo, locale);
@@ -62,6 +122,7 @@ export class DmRouter {
     const quote = replyTo ? { reply_parameters: { message_id: replyTo } } : {};
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: card.text, parse_mode: "Markdown", ...quote, reply_markup: card.reply_markup }, "interactive");
   }
+
 
   /** Disambiguation tap. Target: "<mode>:<qid>". */
   async pickMode(chatId: number, messageId: number, userId: number, target: string, locale = "en"): Promise<void> {

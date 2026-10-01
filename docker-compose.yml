@@ -1,18 +1,12 @@
+# Pappy/Omega production stack (default path: hosted api.telegram.org, 50MB cap).
+#
+#   Bot only:      docker compose up -d --build redis controller
+#   Bot + group DJ: docker compose up -d --build   (needs STREAM_* in .env)
+#   + local Bot API server (2GB uploads): add `-f docker-compose.local-api.yml`
+#
+# Health stays on loopback — the bot polls Telegram outbound, nothing inbound.
+# Full runbook: docs/70-DEPLOY.md.
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: pappy
-      POSTGRES_PASSWORD: pappy
-      POSTGRES_DB: pappy
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pappy"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -23,52 +17,43 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  # Local Bot API server — ADR-04. 2000MB uploads, unlimited downloads.
-  # Requires TELEGRAM_API_ID / TELEGRAM_API_HASH from https://my.telegram.org
-  botapi:
-    image: tdlib/telegram-bot-api:latest
-    environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env (my.telegram.org)}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env (my.telegram.org)}
-    volumes:
-      - botapidata:/var/lib/telegram-bot-api
-    ports:
-      - "8081:8081"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:8081/ > /dev/null || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+    restart: unless-stopped
+    mem_limit: 256m
+    logging: &logrot
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   controller:
     build:
       context: .
       dockerfile: apps/controller/Dockerfile
+    image: pappy-controller:local
     env_file: [.env]
     environment:
-      BOT_API_ROOT: http://botapi:8081
-      REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgres://pappy:pappy@postgres:5432/pappy
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     depends_on:
-      postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     restart: unless-stopped
+    mem_limit: 768m
+    logging: *logrot
 
-  # Group-call DJ engine (ADR-02). Crash-only: exits loud without a session.
+  # Group-call DJ engine (ADR-02). Crash-only: without STREAM_SESSION_STRING +
+  # API creds it exits after 5 tries and stays down (loud, not looping forever).
   stream-worker:
     build:
-      context: ./workers/stream-py
+      context: .
+      dockerfile: workers/stream-py/Dockerfile
+    image: pappy-stream-worker:local
     env_file: [.env]
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     depends_on:
       redis: { condition: service_healthy }
     restart: on-failure:5
+    mem_limit: 1536m
+    logging: *logrot
 
 volumes:
-  pgdata:
   redisdata:
-  botapidata:

@@ -1,0 +1,32 @@
+# Power path: local Bot API server — 2000MB uploads, unlimited downloads (ADR-04).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --build
+# Requires TELEGRAM_API_ID / TELEGRAM_API_HASH in .env (https://my.telegram.org).
+# botapi is NOT published to the host — only the controller talks to it.
+services:
+  botapi:
+    image: tdlib/telegram-bot-api:latest
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env (my.telegram.org)}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env (my.telegram.org)}
+    volumes:
+      - botapidata:/var/lib/telegram-bot-api
+    expose: ["8081"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8081/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  controller:
+    environment:
+      BOT_API_ROOT: http://botapi:8081
+    depends_on:
+      botapi: { condition: service_healthy }
+
+volumes:
+  botapidata:

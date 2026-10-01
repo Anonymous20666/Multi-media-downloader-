@@ -20,3 +20,7 @@ jobs:
           python-version: "3.11"
       - run: python -m unittest discover -s worker/tests -t .
         working-directory: workers/stream-py
+      # Dockerfile rot check: both images must build; override must parse.
+      - run: cp .env.example .env
+      - run: docker compose build
+      - run: TELEGRAM_API_ID=1 TELEGRAM_API_HASH=dummy docker compose -f docker-compose.yml -f docker-compose.local-api.yml config -q

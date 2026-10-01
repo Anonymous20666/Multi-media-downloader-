@@ -22,12 +22,22 @@ Next: VPS verification (worker boot, 24h stream, induced failures).
 > disable (so `/play` reaches the bot without `@mentions`), then add the bot +
 > the assistant account to the flagged group (assistant needs *Manage Voice Chats*).
 
-## Quickstart (VPS)
+## Deploy (VPS)
+
+Full runbook: **`docs/70-DEPLOY.md`** (provision → secrets → launch → verify →
+ops). Short version, on the box as an unprivileged user:
 
 ```bash
-cp .env.example .env   # set BOT_TOKEN (BotFather), OWNER_IDS, TELEGRAM_API_ID/HASH (my.telegram.org)
-docker compose up -d --build
+cp .env.example .env   # set BOT_TOKEN, OWNER_IDS (§5 of the runbook)
+docker compose up -d --build            # bot + DJ (needs STREAM_*)
+docker compose up -d --build redis controller   # bot only
 curl localhost:3000/readyz
+```
+
+Power path (local Bot API server, 2GB uploads):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --build
 ```
 
 Without Docker (dev):
@@ -43,8 +53,8 @@ Talk to the bot: `/start` (rich hub + fallback), `/ping`.
 
 - `apps/controller` — grammY ingress, throttled sender (§57), UI components (§E), health
 - `packages/media-manifest` — manifest v1 (§16), provider interface, SSRF guard, umedia adapter (ADR-05)
-- `workers/stream-py` — call-worker stub (real engine in V1.5, ADR-02)
-- `docs/` — Phase-1 audit, master plan, verification reports
+- `workers/stream-py` — group-call engine: py-tgcalls + ntgcalls + pyrofork over a versioned Redis contract (ADR-02)
+- `docs/` — Phase-1 audit, master plan, verification reports, deploy runbook
 - `telegram-versions.json` — pinned Telegram versions (§103)
 
 ## Docs (read in order)
@@ -52,3 +62,4 @@ Talk to the bot: `/start` (rich hub + fallback), `/ping`.
 1. `docs/PHASE-1-TECHNOLOGY-AUDIT.md` — verified Telegram landscape (Bot API 10.3 …)
 2. `docs/00-PAPPY-OMEGA-MASTER-PLAN.md` — the build contract (A–T + ADRs + roadmap)
 3. `docs/10-PAPPY-MEDIA-API-VERIFICATION.md` — 2GB proof + engine audit (ADR-05)
+4. `docs/70-DEPLOY.md` — VPS deploy runbook

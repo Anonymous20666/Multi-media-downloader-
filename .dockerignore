@@ -1,0 +1,22 @@
+# Keep build contexts small and secret-free. Both images build from repo root.
+.git
+.github
+node_modules
+**/node_modules
+dist
+**/dist
+build
+coverage
+.env
+.env.*
+*.tgz
+out/
+data/
+pappy-media-downloads/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+docs/
+*.md
+.DS_Store

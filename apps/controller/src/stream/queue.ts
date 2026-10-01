@@ -9,6 +9,7 @@ export interface QueuedTrack {
   pageUrl: string;
   duration?: number | null;
   addedBy: number;
+  isVideo?: boolean;
 }
 
 export type PlayState = "idle" | "starting" | "live" | "paused";

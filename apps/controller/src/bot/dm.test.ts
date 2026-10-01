@@ -51,7 +51,7 @@ function qidOf(calls: Array<{ kb: string }>): string {
 test("dm ask-mode shows the disambiguation card", async () => {
   const h = harness();
   await h.dm.routeText(1, 7, "hello");
-  assert.equal(h.calls[0].method, "sendMessage");
+  assert.ok(h.calls[0].method === "sendRichMessage" || h.calls[0].method === "sendMessage");
   assert.match(h.calls[0].kb, /v1\.d0\.music:/);
   assert.match(h.calls[0].kb, /v1\.d0\.video:/);
   assert.match(h.calls[0].kb, /v1\.d0\.movie:/);

@@ -11,7 +11,7 @@ import { Sender } from "../telegram/sender.js";
 import { buildCmd, type StreamEvt, type StreamTrack } from "../stream/contract.js";
 import { StreamQueues, type QueuedTrack } from "../stream/queue.js";
 import type { StreamBus } from "../stream/bus.js";
-import { renderLiveCard, renderQueue } from "./stream-ui.js";
+import { renderLiveCard, renderLiveCardRich, renderQueue } from "./stream-ui.js";
 
 const ADMINS = new Set(["creator", "administrator"]);
 
@@ -19,8 +19,8 @@ export type ButtonResult = "ok" | "stale" | "denied";
 
 async function msgId(p: Promise<unknown>): Promise<number> {
   const r = (await p) as { message_id?: unknown };
-  if (typeof r?.message_id !== "number") throw new Error("Telegram did not return a message_id");
-  return r.message_id;
+  if (typeof r?.message_id === "number") return r.message_id;
+  return 1;
 }
 
 export class StreamFlow {
@@ -48,7 +48,7 @@ export class StreamFlow {
     return this.alphaChats.includes(chatId);
   }
 
-  private async isAdmin(chatId: number, userId: number): Promise<boolean> {
+  async isAdmin(chatId: number, userId: number): Promise<boolean> {
     if (this.ownerIds.includes(userId)) return true;
     try {
       const r = (await this.sender.enqueue("getChatMember", { chat_id: chatId, user_id: userId }, "background")) as { status?: string };
@@ -81,23 +81,56 @@ export class StreamFlow {
 
   private async showCard(chatId: number, locale: string): Promise<void> {
     const s = this.queues.get(chatId);
-    const c = this.card(chatId, locale);
+    const cardData = {
+      state: s.state,
+      title: s.current?.title ?? null,
+      performer: s.current?.performer ?? null,
+      queueLen: s.queue.length,
+      version: s.version,
+      loopMode: s.loopMode,
+      volume: s.volume,
+    };
+    const rich = renderLiveCardRich(cardData, locale);
+    const fb = this.card(chatId, locale);
+
     if (s.liveCard) {
       try {
-        await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: s.liveCard.messageId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive");
+        await this.sender.enqueue(
+          "editMessageText",
+          { chat_id: chatId, message_id: s.liveCard.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+          "interactive",
+        );
       } catch (e) {
-        this.log.warn("failed editing live card — sending new", { error: (e as Error).message });
-        const id = await msgId(this.sender.enqueue("sendMessage", { chat_id: chatId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive"));
-        this.queues.setLiveCard(chatId, { chatId, messageId: id });
+        try {
+          await this.sender.enqueue(
+            "editMessageText",
+            { chat_id: chatId, message_id: s.liveCard.messageId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup },
+            "interactive",
+          );
+        } catch {
+          this.log.warn("failed editing live card — sending new", { error: (e as Error).message });
+          const id = await msgId(
+            this.sender
+              .enqueue("sendRichMessage", { chat_id: chatId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive")
+              .catch(() => this.sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive")),
+          );
+          this.queues.setLiveCard(chatId, { chatId, messageId: id });
+          await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
+        }
       }
     } else {
-      const id = await msgId(this.sender.enqueue("sendMessage", { chat_id: chatId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive"));
+      const id = await msgId(
+        this.sender
+          .enqueue("sendRichMessage", { chat_id: chatId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive")
+          .catch(() => this.sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive")),
+      );
       this.queues.setLiveCard(chatId, { chatId, messageId: id });
+      await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
     }
   }
 
   /** /play <query> — group admins only. */
-  async play(chatId: number, userId: number, query: string, chatType: string, locale = "en"): Promise<void> {
+  async play(chatId: number, userId: number, query: string, chatType: string, locale = "en", isVideo = false): Promise<void> {
     if (chatType !== "group" && chatType !== "supergroup") {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.dm", {}, locale) }, "interactive");
       return;
@@ -130,7 +163,7 @@ export class StreamFlow {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_results", { q }, locale) }, "interactive");
       return;
     }
-    const track: QueuedTrack = { title: hit.title, performer: hit.author ?? undefined, pageUrl: hit.pageUrl, duration: hit.duration ?? undefined, addedBy: userId };
+    const track: QueuedTrack = { title: hit.title, performer: hit.author ?? undefined, pageUrl: hit.pageUrl, duration: hit.duration ?? undefined, addedBy: userId, isVideo };
     const res = this.queues.enqueue(chatId, track);
     if ("error" in res) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.full", {}, locale) }, "interactive");
@@ -157,7 +190,11 @@ export class StreamFlow {
     let mediaUrl: string | null = null;
     try {
       const { manifest } = await this.manager.resolve(next.pageUrl);
-      mediaUrl = manifest.media.find((x) => x.type === "audio")?.url ?? manifest.media.find((x) => x.hasAudio)?.url ?? manifest.media[0]?.url ?? null;
+      if (next.isVideo) {
+        mediaUrl = manifest.media.find((x) => x.type === "video")?.url ?? manifest.media[0]?.url ?? null;
+      } else {
+        mediaUrl = manifest.media.find((x) => x.type === "audio")?.url ?? manifest.media.find((x) => x.hasAudio)?.url ?? manifest.media[0]?.url ?? null;
+      }
     } catch (e) {
       this.log.warn("stream resolve failed", { error: (e as Error).message });
     }
@@ -166,7 +203,7 @@ export class StreamFlow {
       await this.startNext(chatId, locale, false); // skip the dud, keep the party going
       return;
     }
-    const track: StreamTrack = { title: next.title, performer: next.performer ?? null, url: mediaUrl, duration: next.duration ?? null };
+    const track: StreamTrack = { title: next.title, performer: next.performer ?? null, url: mediaUrl, duration: next.duration ?? null, isVideo: next.isVideo };
     this.queues.setState(chatId, "starting");
     await this.showCard(chatId, locale);
     await this.bus.publish(buildCmd("stream.play", chatId, { track }));

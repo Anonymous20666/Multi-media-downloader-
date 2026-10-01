@@ -31,6 +31,29 @@ import type { SettingsFlow } from "./settings.js";
 import { isOwner, type OwnerFlow } from "./owner.js";
 import { UserPrefs, UsersSeen, type SeenChats } from "../state/stores.js";
 
+import {
+  renderGroupMenuRich,
+  renderGroupMenuFallback,
+  renderGroupMenuPlayPrompt,
+  renderGroupMenuMoviesPrompt,
+  renderGroupMenuShortsPrompt,
+  renderGroupMenuSettingsPrompt,
+} from "./group-menu.js";
+import {
+  StreamWizardRegistry,
+  renderWizardMode,
+  renderWizardDurationType,
+  renderWizardMinutes,
+  renderWizardHours,
+  renderWizardCustomHoursPrompt,
+  renderWizardVibe,
+  renderWizardCustomVibePrompt,
+  renderWizardMovieCategories,
+  renderWizardCustomMoviePrompt,
+  renderWizardConnecting,
+} from "./stream-wizard.js";
+import { detectIntent } from "./dm.js";
+
 export function createApiCall(cfg: Config): ApiCall {
   const root = (cfg.botApiRoot ?? "https://api.telegram.org").replace(/\/$/, "");
   const token = cfg.botToken;
@@ -76,6 +99,7 @@ export interface BotFlows {
   movies?: import("./movies.js").MovieFlow;
   grab?: import("./grab.js").GrabFlow;
   adapter?: import("@pappy/media-manifest").UmediaAdapter;
+  wizardRegistry?: StreamWizardRegistry;
 }
 
 export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlows): Bot {
@@ -83,6 +107,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
   const bot = new Bot(cfg.botToken, cfg.botApiRoot ? { client: { apiRoot: cfg.botApiRoot } } : {});
   const t0 = Date.now();
   const ownerIds = cfg.ownerIds;
+  const wizardRegistry = flows.wizardRegistry ?? new StreamWizardRegistry();
 
   /** Provider-costing gate: bans + force-join (origin preserved across verify). */
   async function gate(chatId: number, userId: number, kind: "music" | "url", query: string): Promise<boolean> {
@@ -128,16 +153,82 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     }
   }
 
+  async function showGroupMenu(chatId: number, chatTitle: string): Promise<void> {
+    try {
+      const rich = renderGroupMenuRich(chatTitle);
+      await sender.enqueue("sendRichMessage", { chat_id: chatId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive");
+      log.info("group menu rendered", { mode: "rich", chatId });
+    } catch (e) {
+      const fb = renderGroupMenuFallback(chatTitle);
+      await sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive");
+      log.info("group menu rendered", { mode: "fallback", chatId, richError: (e as Error).message });
+    }
+  }
+
   bot.command("start", async (ctx) => {
     const chatId = ctx.chatId;
     if (!chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    if (isGroup) {
+      recordGroup(chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    }
     const payload = argText(ctx.message?.text ?? "", "start").trim();
     if (!payload) {
-      await showHub(chatId);
+      if (isGroup) {
+        await showGroupMenu(chatId, (ctx.chat as { title?: string } | undefined)?.title ?? "Group");
+      } else {
+        await showHub(chatId);
+      }
       return;
     }
     await routeDeepLink(chatId, ctx.from.id, ctx.message?.message_id, payload);
+  });
+
+  bot.command(["menu", "deck"], async (ctx) => {
+    const chatId = ctx.chatId;
+    if (!chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    if (isGroup) {
+      recordGroup(chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+      await showGroupMenu(chatId, (ctx.chat as { title?: string } | undefined)?.title ?? "Group");
+    } else {
+      await showHub(chatId);
+    }
+  });
+
+  bot.command("stream", async (ctx) => {
+    const chatId = ctx.chatId;
+    if (!ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    if (!isGroup) {
+      await sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.dm") }, "interactive");
+      return;
+    }
+    recordGroup(chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    if (!(await flows.stream.isAdmin(chatId, ctx.from.id))) {
+      await sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin") }, "interactive");
+      return;
+    }
+    const session = wizardRegistry.create(chatId, ctx.from.id, 0);
+    const rich = renderWizardMode(session.id);
+    try {
+      const sent = (await sender.enqueue(
+        "sendRichMessage",
+        { chat_id: chatId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+        "interactive",
+      )) as { message_id?: number } | undefined;
+      if (sent?.message_id) session.messageId = sent.message_id;
+    } catch {
+      const sent = (await sender.enqueue(
+        "sendMessage",
+        { chat_id: chatId, text: "📡 *Stream Wizard*\nSelect medium:", parse_mode: "Markdown", reply_markup: rich.reply_markup },
+        "interactive",
+      )) as { message_id?: number } | undefined;
+      if (sent?.message_id) session.messageId = sent.message_id;
+    }
   });
 
   async function routeDeepLink(chatId: number, userId: number, replyTo: number | undefined, payload: string): Promise<void> {
@@ -559,13 +650,35 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "sl":
           await toast(t("set.lang_note"));
           break;
-        case "po":
+        case "po": {
           if (!isOwner(ownerIds, userId)) {
             await toast(t("own.only"), true);
             break;
           }
-          if (messageId) await flows.owner.providers(chatId, messageId);
+          if (!messageId) break;
+          const target = parsed.target;
+          if (target === "p") {
+            await flows.owner.providers(chatId, messageId);
+          } else if (target === "api") {
+            await flows.owner.apiConfig(chatId, messageId);
+          } else if (target === "set_id") {
+            await flows.owner.promptSet(chatId, messageId, userId, "api_id");
+          } else if (target === "set_hash") {
+            await flows.owner.promptSet(chatId, messageId, userId, "api_hash");
+          } else if (target === "set_session") {
+            await flows.owner.promptSet(chatId, messageId, userId, "session_string");
+          } else if (target === "restart_worker") {
+            await flows.owner.restartWorker(chatId, messageId);
+            await toast("Worker restart dispatched! ✅");
+          } else if (target === "api_cancel") {
+            await flows.owner.cancelPrompt(chatId, messageId, userId);
+          } else if (target === "dash") {
+            await flows.owner.dashboard(chatId, "en", messageId);
+          } else if (target === "sys") {
+            await flows.owner.sysinfo(chatId);
+          }
           break;
+        }
         case "pt":
           if (!isOwner(ownerIds, userId)) {
             await toast(t("own.only"), true);
@@ -614,6 +727,206 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "hub":
           if (messageId) await handleHub(chatId, messageId, userId, parsed.target);
           break;
+        case "gm": {
+          if (!messageId) break;
+          const target = parsed.target;
+          if (target === "play") {
+            const rich = renderGroupMenuPlayPrompt();
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "movies") {
+            const rich = renderGroupMenuMoviesPrompt();
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "shorts") {
+            const rich = renderGroupMenuShortsPrompt();
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "settings") {
+            const rich = renderGroupMenuSettingsPrompt();
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "back") {
+            const chatTitle = (ctx.chat as { title?: string } | undefined)?.title ?? "Group";
+            const rich = renderGroupMenuRich(chatTitle);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "stream") {
+            if (!(await flows.stream.isAdmin(chatId, userId))) {
+              await toast(t("stream.need_admin"), true);
+              break;
+            }
+            const session = wizardRegistry.create(chatId, userId, messageId);
+            const rich = renderWizardMode(session.id);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          }
+          break;
+        }
+        case "swm": {
+          if (!messageId) break;
+          const [sid, mode] = parsed.target.split(":");
+          const session = sid ? wizardRegistry.get(sid) : undefined;
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          session.mode = (mode as "music" | "video") || "music";
+          if (session.mode === "music") {
+            session.step = "duration_type";
+            const rich = renderWizardDurationType(sid);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else {
+            session.step = "movie_genre";
+            const rich = renderWizardMovieCategories(sid);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          }
+          break;
+        }
+        case "swd": {
+          if (!messageId) break;
+          const [sid, scale] = parsed.target.split(":");
+          const session = sid ? wizardRegistry.get(sid) : undefined;
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          if (scale === "min") {
+            session.step = "minutes";
+            const rich = renderWizardMinutes(sid);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else {
+            session.step = "hours";
+            const rich = renderWizardHours(sid);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          }
+          break;
+        }
+        case "swb": {
+          if (!messageId) break;
+          const session = wizardRegistry.get(parsed.target);
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          session.step = "mode";
+          const rich = renderWizardMode(session.id);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swdb": {
+          if (!messageId) break;
+          const session = wizardRegistry.get(parsed.target);
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          session.step = "duration_type";
+          const rich = renderWizardDurationType(session.id);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swv": {
+          if (!messageId) break;
+          const [sid, val] = parsed.target.split(":");
+          const session = sid ? wizardRegistry.get(sid) : undefined;
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          if (val?.endsWith("m")) {
+            const m = parseInt(val, 10);
+            session.durationMinutes = m;
+            session.durationLabel = `${m} min`;
+          } else if (val?.endsWith("h")) {
+            const h = parseInt(val, 10);
+            session.durationMinutes = h * 60;
+            session.durationLabel = h === 1 ? "1 hr" : `${h} hrs`;
+          }
+          session.step = "vibe";
+          const rich = renderWizardVibe(sid, session.durationLabel);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swc": {
+          if (!messageId) break;
+          const session = wizardRegistry.get(parsed.target);
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          session.waitingCustomHours = true;
+          session.step = "custom_hours";
+          const rich = renderWizardCustomHoursPrompt(session.id);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swq": {
+          if (!messageId) break;
+          const [sid, vibeRaw] = parsed.target.split(":");
+          const session = sid ? wizardRegistry.get(sid) : undefined;
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          const vibe = (vibeRaw ?? "Top Hits").replace(/_/g, " ");
+          const rich = renderWizardConnecting(vibe, session.durationLabel);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
+          wizardRegistry.delete(sid);
+          await flows.stream.play(chatId, userId, vibe, ctx.chat?.type ?? "supergroup", "en", false);
+          break;
+        }
+        case "swcv": {
+          if (!messageId) break;
+          const session = wizardRegistry.get(parsed.target);
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          session.waitingCustomVibe = true;
+          const rich = renderWizardCustomVibePrompt(session.id);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swvb": {
+          if (!messageId) break;
+          const session = wizardRegistry.get(parsed.target);
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          const rich = session.durationMinutes >= 60 ? renderWizardHours(session.id) : renderWizardMinutes(session.id);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swmc": {
+          if (!messageId) break;
+          const [sid, cat] = parsed.target.split(":");
+          const session = sid ? wizardRegistry.get(sid) : undefined;
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          const category = cat ?? "Cinema";
+          const rich = renderWizardConnecting(category, "Movie Runtime");
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
+          wizardRegistry.delete(sid);
+          await flows.stream.play(chatId, userId, category, ctx.chat?.type ?? "supergroup", "en", true);
+          break;
+        }
+        case "swcm": {
+          if (!messageId) break;
+          const session = wizardRegistry.get(parsed.target);
+          if (!session) {
+            await toast("Stream session expired.", true);
+            break;
+          }
+          session.waitingCustomMovie = true;
+          const rich = renderWizardCustomMoviePrompt(session.id);
+          await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          break;
+        }
+        case "swx": {
+          wizardRegistry.delete(parsed.target);
+          if (messageId) {
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: "✕ _Stream Wizard cancelled._", parse_mode: "Markdown" }, "interactive").catch(() => {});
+          }
+          break;
+        }
         default:
           break;
       }
@@ -678,7 +991,85 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     flows.seen.record(ctx.from.id);
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return; // unknown command — ignore quietly
-    if (ctx.chat?.type !== "private") return;
+
+    // Check if owner is inputting API ID, API Hash, or Session String
+    if (isOwner(ownerIds, ctx.from.id) && flows.owner.isWaitingInput(ctx.from.id)) {
+      const handled = await flows.owner.handleInput(ctx.chatId, ctx.from.id, text, ctx.message.message_id);
+      if (handled) return;
+    }
+
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+
+    if (isGroup) {
+      // 1. Check if user is in an active stream wizard session in this chat
+      const session = wizardRegistry.findByUser(ctx.chatId, ctx.from.id);
+      if (session?.waitingCustomHours) {
+        // Delete user's message immediately to keep chat clean (§Zero Clutter)
+        await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
+        const hours = parseInt(text.replace(/[^0-9]/g, ""), 10);
+        if (Number.isFinite(hours) && hours > 0 && hours <= 720) {
+          session.waitingCustomHours = false;
+          session.durationMinutes = hours * 60;
+          session.durationLabel = `${hours} hrs`;
+          session.step = "vibe";
+          const rich = renderWizardVibe(session.id, session.durationLabel);
+          await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+        }
+        return;
+      }
+      if (session?.waitingCustomVibe) {
+        await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
+        session.waitingCustomVibe = false;
+        const rich = renderWizardConnecting(text, session.durationLabel);
+        await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
+        wizardRegistry.delete(session.id);
+        await flows.stream.play(ctx.chatId, ctx.from.id, text, ctx.chat?.type ?? "supergroup", "en", false);
+        return;
+      }
+      if (session?.waitingCustomMovie) {
+        await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
+        session.waitingCustomMovie = false;
+        const rich = renderWizardConnecting(text, "Movie Runtime");
+        await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
+        wizardRegistry.delete(session.id);
+        await flows.stream.play(ctx.chatId, ctx.from.id, text, ctx.chat?.type ?? "supergroup", "en", true);
+        return;
+      }
+
+      // 2. Check conversational AI intent routing (e.g. "pappy play Lithe", "omega stream Trap")
+      const lower = text.toLowerCase();
+      const isAddressed =
+        lower.startsWith("pappy") ||
+        lower.startsWith("omega") ||
+        lower.startsWith("hey pappy") ||
+        lower.startsWith("hey omega") ||
+        ctx.message.reply_to_message?.from?.id === ctx.me?.id;
+
+      if (!isAddressed) return;
+
+      flows.presence.react(ctx.chatId, ctx.message.message_id, "👀");
+      const { intent, query } = detectIntent(text);
+
+      if (intent === "stream") {
+        await flows.stream.play(ctx.chatId, ctx.from.id, query, ctx.chat?.type ?? "supergroup", "en", false);
+        return;
+      }
+      if (intent === "movie" && flows.movies) {
+        await flows.movies.search(ctx.chatId, ctx.from.id, query, undefined, "en", ctx.message.message_id);
+        return;
+      }
+      if (intent === "url") {
+        if (!(await gate(ctx.chatId, ctx.from.id, "url", query))) return;
+        await flows.urls.submit(ctx.chatId, ctx.from.id, query, "en", ctx.message.message_id);
+        return;
+      }
+      // Default to music search
+      if (!(await gate(ctx.chatId, ctx.from.id, "music", query))) return;
+      await flows.music.search(ctx.chatId, ctx.from.id, query, "en", ctx.message.message_id);
+      return;
+    }
+
+    // Private DM routing
     flows.presence.react(ctx.chatId, ctx.message.message_id, "👀");
     if (isHttpUrl(text)) {
       if (!(await gate(ctx.chatId, ctx.from.id, "url", text))) return;

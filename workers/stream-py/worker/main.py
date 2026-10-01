@@ -33,8 +33,13 @@ def log(level: str, msg: str, **fields: object) -> None:
 
 
 def load_env_file(path: str = ".env") -> None:
-    for candidate in [path, os.path.join(os.path.dirname(__file__), "..", "..", path), os.path.join(os.path.dirname(__file__), "..", path)]:
-        if os.path.exists(candidate):
+    current = os.path.dirname(os.path.abspath(__file__))
+    candidates = [path]
+    for _ in range(4):
+        candidates.append(os.path.join(current, path))
+        current = os.path.dirname(current)
+    for candidate in candidates:
+        if os.path.isfile(candidate):
             try:
                 with open(candidate, "r", encoding="utf-8") as f:
                     for line in f:
@@ -55,8 +60,8 @@ def load_config() -> dict:
     load_env_file()
     fake_engine_env = os.environ.get("STREAM_FAKE_ENGINE", "").strip()
     session = os.environ.get("STREAM_SESSION_STRING", "").strip()
-    api_id = os.environ.get("STREAM_API_ID", "").strip()
-    api_hash = os.environ.get("STREAM_API_HASH", "").strip()
+    api_id = os.environ.get("STREAM_API_ID", "").strip() or os.environ.get("TELEGRAM_API_ID", "").strip()
+    api_hash = os.environ.get("STREAM_API_HASH", "").strip() or os.environ.get("TELEGRAM_API_HASH", "").strip()
     is_fake = fake_engine_env == "1" or (not session or not api_id or not api_hash)
     return {
         "session": session,
@@ -148,7 +153,7 @@ def dispatch_one(bus: object, engine: CallEngine, stream_id_of: dict[int, str], 
             except UnsafeUrl as e:
                 evt("error", error={"code": "SOURCE_REJECTED", "message": str(e)})
                 return
-            engine.play(cmd.chat_id, src.url, src.headers)
+            engine.play(cmd.chat_id, src.url, src.headers, is_video=bool(getattr(cmd.track, "is_video", False)))
             evt("track.started", track=cmd.track)
         elif cmd.type == "stream.pause":
             engine.pause(cmd.chat_id)

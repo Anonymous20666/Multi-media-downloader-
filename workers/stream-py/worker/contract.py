@@ -24,6 +24,7 @@ class Track:
     url: str
     performer: Optional[str] = None
     duration: Optional[float] = None
+    is_video: bool = False
 
 
 @dataclass
@@ -59,7 +60,13 @@ def _track(d: Any) -> Track:
         raise ContractError("track.title required")
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise ContractError("track.url must be an http(s) URL")
-    return Track(title=title[:300], url=url, performer=d.get("performer"), duration=d.get("duration"))
+    return Track(
+        title=title[:300],
+        url=url,
+        performer=d.get("performer"),
+        duration=d.get("duration"),
+        is_video=bool(d.get("isVideo", False)),
+    )
 
 
 def parse_cmd(raw: Any) -> Cmd:

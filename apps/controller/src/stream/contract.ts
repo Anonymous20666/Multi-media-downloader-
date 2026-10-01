@@ -15,6 +15,7 @@ export const TrackSchema = z.object({
   performer: z.string().max(200).nullable().optional(),
   url: z.string().url(),
   duration: z.number().nonnegative().nullable().optional(),
+  isVideo: z.boolean().optional(),
 });
 export type StreamTrack = z.infer<typeof TrackSchema>;
 

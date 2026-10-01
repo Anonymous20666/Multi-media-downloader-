@@ -28,7 +28,7 @@ class CallEngine:
     def start(self) -> None:
         raise NotImplementedError
 
-    def play(self, chat_id: int, url: str, headers: Optional[dict] = None) -> bool:
+    def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
         """Play (joining first if needed). Returns True when this call was fresh."""
         raise NotImplementedError
 
@@ -70,7 +70,7 @@ class FakeEngine(CallEngine):
             err, self.fail_next = self.fail_next, None
             raise err
 
-    def play(self, chat_id: int, url: str, headers: Optional[dict] = None) -> bool:
+    def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
         self._maybe_fail()
         fresh = chat_id not in self.live
         self.live.add(chat_id)
@@ -137,13 +137,14 @@ class PyTgCallsEngine(CallEngine):
         self._call.add_handler(_on_update)
         self._call.start()
 
-    def play(self, chat_id: int, url: str, headers: Optional[dict] = None) -> bool:
-        from pytgcalls.types import AudioQuality, MediaStream
+    def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
+        from pytgcalls.types import AudioQuality, VideoQuality, MediaStream
 
         stream = MediaStream(
             url,
             audio_parameters=AudioQuality.HIGH,
-            video_flags=MediaStream.Flags.IGNORE,
+            video_parameters=VideoQuality.FHD_1080P if is_video else None,
+            video_flags=None if is_video else MediaStream.Flags.IGNORE,
             headers=headers or None,
         )
         try:

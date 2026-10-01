@@ -41,7 +41,7 @@ import { RichMessageBuilder } from "../ui/components.js";
 
 /** Rich Voice Chat Deck card (Bot API 10.3 blocks + in-message transport controls). */
 export function renderLiveCardRich(d: LiveCardData, locale = "en"): Record<string, unknown> {
-  const head = d.state === "live" ? "NOW STREAMING // VC DECK" : d.state === "paused" ? "STREAM PAUSED // VC DECK" : "STARTING STREAM // VC DECK";
+  const head = d.state === "live" ? "NOW STREAMING // VC DECK" : d.state === "paused" ? "STREAM PAUSED // VC DECK" : `STARTING STREAM // ${t("stream.live.starting", {}, locale)}`;
   const loopLabel = d.loopMode === "track" ? "🔂 Track" : d.loopMode === "queue" ? "🔁 Queue" : "🔁 Off";
   const vol = d.volume ?? 100;
   const v = `v${d.version}`;

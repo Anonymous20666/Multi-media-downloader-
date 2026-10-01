@@ -11,6 +11,8 @@ import { packCb, type FallbackMessage } from "../ui/components.js";
 import type { MusicFlow } from "./music.js";
 import { PendingQueries, SearchSessions, SeenChats, UserPrefs, type DmMode } from "../state/stores.js";
 
+import { RichMessageBuilder } from "../ui/components.js";
+
 export function renderDisambiguation(query: string, qid: string, locale = "en"): FallbackMessage {
   return {
     text: `*${t("dm.ask", { q: query.slice(0, 60) }, locale)}*`,
@@ -29,8 +31,57 @@ export function renderDisambiguation(query: string, qid: string, locale = "en"):
   };
 }
 
-export function detectIntent(text: string): { intent: "music" | "movie" | "url" | "ask"; query: string } {
-  const trimmed = text.trim();
+export function renderDisambiguationRich(query: string, qid: string, locale = "en"): Record<string, unknown> {
+  const rows = [
+    [
+      { text: t("dm.opt.music", {}, locale), callback_data: packCb("d0", `music:${qid}`, 1) },
+      { text: t("dm.opt.video", {}, locale), callback_data: packCb("d0", `video:${qid}`, 1) },
+    ],
+    [
+      { text: t("dm.opt.movie", {}, locale), callback_data: packCb("d0", `movie:${qid}`, 1) },
+      { text: t("common.cancel", {}, locale), callback_data: packCb("mx", qid, 1) },
+    ],
+  ];
+
+  const builder = new RichMessageBuilder()
+    .heading(2, `🔎 DISCOVERY // ${query.slice(0, 30).toUpperCase()}`)
+    .divider()
+    .paragraph(`What would you like to retrieve for **${query.slice(0, 50)}**?`)
+    .table(
+      [
+        [
+          { text: "Option", is_header: true },
+          { text: "Format & Quality", is_header: true },
+        ],
+        [{ text: "🎵 Music" }, { text: "Lossless FLAC / 320k MP3" }],
+        [{ text: "🎬 Video Clip" }, { text: "HD 1080p Music Video" }],
+        [{ text: "🍿 Movie / Series" }, { text: "Full Feature Film / Episodes" }],
+      ],
+      { is_bordered: true, is_striped: true },
+    );
+
+  const rendered = builder.build();
+  return {
+    rich_message: rendered.rich_message,
+    reply_markup: { inline_keyboard: rows },
+    blocks: rendered.blocks,
+  };
+}
+
+export function detectIntent(text: string): { intent: "music" | "movie" | "url" | "stream" | "ask"; query: string } {
+  let trimmed = text.trim();
+
+  // Strip conversational prefixes: "Pappy ...", "Omega ...", "Hey Pappy ..."
+  const conversationalMatch = /^(?:(?:hey|hi|hello|yo)\s+)?(?:pappy|omega)[,\s:]+(.+)$/i.exec(trimmed);
+  if (conversationalMatch?.[1]) {
+    trimmed = conversationalMatch[1].trim();
+  }
+
+  // Stream command: "stream Lithe", "stream Burna Boy in VC"
+  const streamMatch = /^(?:stream|dj)\s+(.+?)(?:\s+(?:in|on)\s+(?:vc|call|group))?$/i.exec(trimmed);
+  if (streamMatch?.[1]) {
+    return { intent: "stream", query: streamMatch[1].trim() };
+  }
 
   // Natural language URL / download intent
   const urlMatch = /(https?:\/\/[^\s]+)/i.exec(trimmed);
@@ -51,7 +102,7 @@ export function detectIntent(text: string): { intent: "music" | "movie" | "url" 
 
   // Explicit music / play / song / track / audio prefixes
   const musicPrefixes = [
-    /^(?:play|listen(?:\s+to)?|song|track|audio|sing)\s+(.+)$/i,
+    /^(?:play|listen(?:\s+to)?|song|track|audio|sing|download)\s+(.+)$/i,
     /^(?:find|search)\s+(?:a\s+)?(?:song|track|music|audio)\s+(.+)$/i,
     /^(?:find|search)\s+(.+)\s+(?:song|track|music)$/i,
   ];
@@ -118,9 +169,14 @@ export class DmRouter {
       return;
     }
     const qid = this.pending.create(text, userId);
-    const card = renderDisambiguation(text, qid, locale);
-    const quote = replyTo ? { reply_parameters: { message_id: replyTo } } : {};
-    await this.sender.enqueue("sendMessage", { chat_id: chatId, text: card.text, parse_mode: "Markdown", ...quote, reply_markup: card.reply_markup }, "interactive");
+    try {
+      const rich = renderDisambiguationRich(text, qid, locale);
+      await this.sender.enqueue("sendRichMessage", { chat_id: chatId, ...rich }, "interactive");
+    } catch {
+      const card = renderDisambiguation(text, qid, locale);
+      const quote = replyTo ? { reply_parameters: { message_id: replyTo } } : {};
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: card.text, parse_mode: "Markdown", ...quote, reply_markup: card.reply_markup }, "interactive");
+    }
   }
 
 

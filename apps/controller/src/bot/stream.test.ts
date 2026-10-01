@@ -14,9 +14,10 @@ function harness(opts: { alive?: boolean; admins?: number[] } = {}) {
   const admins = new Set(opts.admins ?? [1]);
   const sender = {
     enqueue: async (method: string, params: Record<string, unknown>) => {
-      calls.push({ method, text: String(params["text"] ?? ""), kb: JSON.stringify(params["reply_markup"] ?? {}) });
+      calls.push({ method, text: String(params["text"] ?? params["rich_message"] ?? ""), kb: JSON.stringify(params["reply_markup"] ?? {}) });
       if (method === "getChatMember") return { status: admins.has(Number(params["user_id"])) ? "administrator" : "member" };
-      return method === "sendMessage" ? { message_id: ++mid } : { ok: true };
+      if (method === "sendMessage" || method === "sendRichMessage") return { message_id: ++mid };
+      return { ok: true };
     },
   } as unknown as Sender;
   let resolves = 0;
@@ -59,7 +60,7 @@ test("stream play: first track starts the call, later tracks queue with position
   assert.equal(h.cmds.length, 1);
   assert.equal(h.cmds[0].type, "stream.play");
   assert.equal((h.cmds[0].track as { url: string }).url, "https://cdn.example/0.mp3");
-  const card = h.calls[h.calls.length - 1];
+  const card = h.calls.find((c) => c.method === "sendRichMessage" || c.method === "sendMessage")!;
   assert.match(card.text, /Joining the voice chat/);
   assert.match(card.kb, /v1\.sp\./);
   assert.match(card.kb, /v1\.ss\./);

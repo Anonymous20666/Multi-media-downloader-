@@ -21,7 +21,7 @@ export interface ParsedCb {
   version: number;
 }
 export function unpackCb(data: string): ParsedCb | null {
-  const m = /^v1\.([a-z0-9_]+)\.([a-z0-9_\-:]+)\.(\d+)\.[a-z0-9]{6}$/i.exec(data);
+  const m = /^v1\.([a-z0-9_]+)\.([a-z0-9_\-: ]+)\.(\d+)\.[a-z0-9]{6}$/i.exec(data);
   if (!m) return null;
   return { action: m[1], target: m[2], version: Number(m[3]) };
 }
@@ -55,6 +55,8 @@ export interface KbButton {
   text: string;
   callback_data?: string;
   url?: string;
+  switch_inline_query_current_chat?: string;
+  switch_inline_query?: string;
 }
 
 export interface FallbackMessage {

@@ -8,6 +8,8 @@ export interface LiveCardData {
   performer: string | null;
   queueLen: number;
   version: number;
+  loopMode?: "off" | "track" | "queue";
+  volume?: number;
 }
 
 /** Live call card: state + now-playing + transport buttons (versioned vs stale taps). */
@@ -15,7 +17,9 @@ export function renderLiveCard(d: LiveCardData, locale = "en"): FallbackMessage 
   const head = d.state === "live" ? t("stream.live.on", {}, locale) : d.state === "paused" ? t("stream.live.paused", {}, locale) : t("stream.live.starting", {}, locale);
   const lines = [`*${head}*`, ""];
   if (d.title) lines.push(`🎵 *${escapeMd(d.title)}*${d.performer ? ` — ${escapeMd(d.performer)}` : ""}`);
-  lines.push(`📋 ${d.queueLen} ${t("stream.queue.next", {}, locale)}`);
+  const loopLabel = d.loopMode === "track" ? "🔂 Track" : d.loopMode === "queue" ? "🔁 Queue" : "🔁 Off";
+  const vol = d.volume ?? 100;
+  lines.push(`📋 ${d.queueLen} ${t("stream.queue.next", {}, locale)}  •  ${loopLabel}  •  🔊 ${vol}%`);
   const v = `v${d.version}`;
   const transport: KbButton[] =
     d.state === "paused"
@@ -23,8 +27,16 @@ export function renderLiveCard(d: LiveCardData, locale = "en"): FallbackMessage 
       : [{ text: "⏸", callback_data: packCb("sp", v, 1) }];
   transport.push({ text: "⏭", callback_data: packCb("ss", v, 1) });
   transport.push({ text: "⏹", callback_data: packCb("sx", v, 1) });
-  return { text: lines.join("\n"), reply_markup: { inline_keyboard: [transport] } };
+
+  const controls: KbButton[] = [
+    { text: loopLabel, callback_data: packCb("slp", v, 1) },
+    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1) },
+    { text: "📋 Queue", callback_data: packCb("sqe", v, 1) },
+  ];
+
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: [transport, controls] } };
 }
+
 
 export function renderQueue(current: { title: string; performer?: string } | null, upcoming: Array<{ title: string; performer?: string }>, locale = "en"): string {
   const lines = [`*${t("stream.queue.title", {}, locale)}*`, ""];

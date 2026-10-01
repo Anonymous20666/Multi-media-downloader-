@@ -3,3 +3,4 @@ py-tgcalls==2.3.3
 ntgcalls==2.2.5
 pyrofork==2.3.69
 redis==8.1.0
+tgcrypto==1.2.5

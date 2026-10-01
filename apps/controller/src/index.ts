@@ -117,7 +117,7 @@ async function main(): Promise<void> {
           return new InMemoryBus();
         })
       : new InMemoryBus();
-    const stream = new StreamFlow(manager, sender, streamBus, new StreamQueues(), cfg.streamAlphaChats, log);
+    const stream = new StreamFlow(manager, sender, streamBus, new StreamQueues(), cfg.streamAlphaChats, log, cfg.ownerIds);
     streamBus.onEvent((evt) => void stream.onEvent(evt).catch((e) => log.warn("stream event failed", { error: (e as Error).message })));
     const settings = new SettingsFlow(sender, prefs);
     const libraryFlow = new LibraryFlow(sender, library, log);

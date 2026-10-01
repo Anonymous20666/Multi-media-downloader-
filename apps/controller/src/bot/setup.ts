@@ -387,6 +387,21 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     await flows.stream.viewQueue(ctx.chatId);
   });
 
+  bot.command(["volume", "vol"], async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    const arg = (ctx.message?.text ?? "").replace(/^\/(volume|vol)(@\w+)?\s*/, "");
+    await flows.stream.volume(ctx.chatId, ctx.from.id, arg);
+  });
+
+  bot.command("loop", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    await flows.stream.loop(ctx.chatId, ctx.from.id);
+  });
+
   bot.on("inline_query", async (ctx) => {
     const q = ctx.inlineQuery;
     flows.seen.record(q.from.id);
@@ -487,6 +502,24 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           else if (r === "denied") await toast(t("stream.need_admin"), true);
           break;
         }
+        case "slp": {
+          const r = await flows.stream.buttonLoop(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          break;
+        }
+        case "svl": {
+          const r = await flows.stream.buttonVolume(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          break;
+        }
+        case "sqe": {
+          const r = await flows.stream.buttonQueue(chatId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          break;
+        }
+
         case "fj":
           if (!messageId) break;
           await handleVerify(chatId, messageId, userId, parsed.target);

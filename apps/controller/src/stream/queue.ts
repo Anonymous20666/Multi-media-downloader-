@@ -13,12 +13,16 @@ export interface QueuedTrack {
 
 export type PlayState = "idle" | "starting" | "live" | "paused";
 
+export type LoopMode = "off" | "track" | "queue";
+
 export interface ChatStream {
   state: PlayState;
   queue: QueuedTrack[];
   current: QueuedTrack | null;
   liveCard?: { chatId: number; messageId: number };
   version: number;
+  loopMode: LoopMode;
+  volume: number;
 }
 
 export const MAX_QUEUE = 50;
@@ -29,7 +33,7 @@ export class StreamQueues {
   get(chatId: number): ChatStream {
     let s = this.map.get(chatId);
     if (!s) {
-      s = { state: "idle", queue: [], current: null, version: 1 };
+      s = { state: "idle", queue: [], current: null, version: 1, loopMode: "off", volume: 100 };
       this.map.set(chatId, s);
     }
     return s;
@@ -43,9 +47,18 @@ export class StreamQueues {
     return { position: s.queue.length };
   }
 
-  /** Shift next → current. Returns null when the queue drained. */
-  advance(chatId: number): QueuedTrack | null {
+  /** Shift next → current. Supports natural track end looping. */
+  advance(chatId: number, opts?: { naturalEnd?: boolean }): QueuedTrack | null {
     const s = this.get(chatId);
+    if (opts?.naturalEnd) {
+      if (s.loopMode === "track" && s.current) {
+        s.version++;
+        return s.current;
+      }
+      if (s.loopMode === "queue" && s.current) {
+        s.queue.push(s.current);
+      }
+    }
     s.current = s.queue.shift() ?? null;
     s.version++;
     return s.current;
@@ -75,7 +88,49 @@ export class StreamQueues {
     this.get(chatId).liveCard = card;
   }
 
+  setLoopMode(chatId: number, mode: LoopMode): LoopMode {
+    const s = this.get(chatId);
+    s.loopMode = mode;
+    s.version++;
+    return s.loopMode;
+  }
+
+  cycleLoopMode(chatId: number): LoopMode {
+    const s = this.get(chatId);
+    const order: LoopMode[] = ["off", "track", "queue"];
+    const next = order[(order.indexOf(s.loopMode) + 1) % order.length] ?? "off";
+    s.loopMode = next;
+    s.version++;
+    return next;
+  }
+
+  setVolume(chatId: number, volume: number): number {
+    const s = this.get(chatId);
+    s.volume = Math.max(0, Math.min(200, Math.round(volume)));
+    s.version++;
+    return s.volume;
+  }
+
+  cycleVolume(chatId: number): number {
+    const s = this.get(chatId);
+    const presets = [50, 100, 150, 200];
+    const curIdx = presets.indexOf(s.volume);
+    const next = curIdx >= 0 ? (presets[(curIdx + 1) % presets.length] ?? 100) : 100;
+    s.volume = next;
+    s.version++;
+    return next;
+  }
+
   reset(chatId: number): void {
-    this.map.set(chatId, { state: "idle", queue: [], current: null, version: this.get(chatId).version + 1 });
+    const prev = this.get(chatId);
+    this.map.set(chatId, {
+      state: "idle",
+      queue: [],
+      current: null,
+      version: prev.version + 1,
+      loopMode: prev.loopMode,
+      volume: prev.volume,
+    });
   }
 }
+

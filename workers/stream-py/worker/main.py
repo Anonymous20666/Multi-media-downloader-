@@ -32,15 +32,41 @@ def log(level: str, msg: str, **fields: object) -> None:
     sys.stdout.flush()
 
 
+def load_env_file(path: str = ".env") -> None:
+    for candidate in [path, os.path.join(os.path.dirname(__file__), "..", "..", path), os.path.join(os.path.dirname(__file__), "..", path)]:
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k not in os.environ:
+                            os.environ[k] = v
+                break
+            except Exception:
+                pass
+
+
 def load_config() -> dict:
+    load_env_file()
+    fake_engine_env = os.environ.get("STREAM_FAKE_ENGINE", "").strip()
+    session = os.environ.get("STREAM_SESSION_STRING", "").strip()
+    api_id = os.environ.get("STREAM_API_ID", "").strip()
+    api_hash = os.environ.get("STREAM_API_HASH", "").strip()
+    is_fake = fake_engine_env == "1" or (not session or not api_id or not api_hash)
     return {
-        "session": os.environ.get("STREAM_SESSION_STRING", ""),
-        "api_id": os.environ.get("STREAM_API_ID", ""),
-        "api_hash": os.environ.get("STREAM_API_HASH", ""),
+        "session": session,
+        "api_id": api_id,
+        "api_hash": api_hash,
         "redis_url": os.environ.get("REDIS_URL", "redis://localhost:6379"),
         "worker_id": os.environ.get("STREAM_WORKER_ID", f"w-{uuid.uuid4().hex[:8]}"),
-        "fake_engine": os.environ.get("STREAM_FAKE_ENGINE", "") == "1",
+        "fake_engine": is_fake,
     }
+
 
 
 def doctor(cfg: dict) -> dict:
@@ -146,7 +172,7 @@ def main() -> int:
     if "--doctor" in sys.argv:
         print(json.dumps(doctor(cfg), indent=2))
         return 0
-    if not cfg["session"] or not cfg["api_id"] or not cfg["api_hash"]:
+    if not cfg["fake_engine"] and (not cfg["session"] or not cfg["api_id"] or not cfg["api_hash"]):
         log("fatal", "STREAM_SESSION_STRING / STREAM_API_ID / STREAM_API_HASH required — refusing to boot faceless")
         return 2
 

@@ -116,3 +116,55 @@ test("stream worker events: error surfaces honestly, stray chats ignored", async
   await h.flow.viewQueue(-100);
   await h.flow.play(-100, 1, "", "supergroup"); // empty query shows queue
 });
+
+test("stream volume and loop controls: command and button interactions", async () => {
+  const h = harness();
+  await h.flow.play(-100, 1, "lithe", "supergroup");
+  const initCmds = h.cmds.length;
+
+  // Volume command: admin vs non-admin
+  await h.flow.volume(-100, 2, "120"); // non-admin
+  assert.equal(h.cmds.length, initCmds);
+  assert.match(h.calls[h.calls.length - 1].text, /admins/);
+
+  await h.flow.volume(-100, 1, "invalid");
+  assert.match(h.calls[h.calls.length - 1].text, /between 0 and 200/);
+
+  await h.flow.volume(-100, 1, "140");
+  assert.equal(h.cmds.length, initCmds + 1);
+  assert.equal(h.cmds[initCmds].type, "stream.volume");
+  assert.equal(h.cmds[initCmds].level, 140);
+  assert.equal(h.queues.get(-100).volume, 140);
+
+  // Volume button
+  const v = h.queues.get(-100).version;
+  assert.equal(await h.flow.buttonVolume(-100, 1, "v999"), "stale");
+  assert.equal(await h.flow.buttonVolume(-100, 2, `v${v}`), "denied");
+  assert.equal(await h.flow.buttonVolume(-100, 1, `v${v}`), "ok");
+  assert.equal(h.cmds[h.cmds.length - 1].type, "stream.volume");
+
+  // Loop command and button
+  await h.flow.loop(-100, 2); // non-admin
+  assert.match(h.calls[h.calls.length - 1].text, /admins/);
+
+  await h.flow.loop(-100, 1);
+  assert.equal(h.queues.get(-100).loopMode, "track");
+  assert.match(h.calls[h.calls.length - 2].text, /Repeating current track/);
+
+  const v2 = h.queues.get(-100).version;
+  assert.equal(await h.flow.buttonLoop(-100, 1, `v${v2}`), "ok");
+  assert.equal(h.queues.get(-100).loopMode, "queue");
+
+  // Track loop replay on track.ended
+  h.queues.setLoopMode(-100, "track");
+  const playsBefore = h.cmds.filter((c) => c.type === "stream.play").length;
+  await h.flow.onEvent(h.evt("track.ended"));
+  const playsAfter = h.cmds.filter((c) => c.type === "stream.play").length;
+  assert.equal(playsAfter, playsBefore + 1); // repeated track re-resolved and played!
+
+  // Button queue
+  const v3 = h.queues.get(-100).version;
+  assert.equal(await h.flow.buttonQueue(-100, `v${v3}`), "ok");
+  assert.match(h.calls[h.calls.length - 1].text, /Queue/);
+});
+

@@ -30,17 +30,26 @@ export class StreamFlow {
   private queues: StreamQueues;
   private alphaChats: number[];
   private log: Logger;
+  private ownerIds: number[];
 
-  constructor(manager: ProviderManager, sender: Sender, bus: StreamBus, queues: StreamQueues, alphaChats: number[], log: Logger) {
+  constructor(manager: ProviderManager, sender: Sender, bus: StreamBus, queues: StreamQueues, alphaChats: number[], log: Logger, ownerIds: number[] = []) {
     this.manager = manager;
     this.sender = sender;
     this.bus = bus;
     this.queues = queues;
     this.alphaChats = alphaChats;
     this.log = log.child({ flow: "stream" });
+    this.ownerIds = ownerIds;
+  }
+
+  private isAllowedChat(chatId: number, userId?: number): boolean {
+    if (userId && this.ownerIds.includes(userId)) return true;
+    if (this.alphaChats.length === 0 || this.alphaChats.includes(0)) return true;
+    return this.alphaChats.includes(chatId);
   }
 
   private async isAdmin(chatId: number, userId: number): Promise<boolean> {
+    if (this.ownerIds.includes(userId)) return true;
     try {
       const r = (await this.sender.enqueue("getChatMember", { chat_id: chatId, user_id: userId }, "background")) as { status?: string };
       return ADMINS.has(r?.status ?? "");
@@ -57,7 +66,15 @@ export class StreamFlow {
   private card(chatId: number, locale: string) {
     const s = this.queues.get(chatId);
     return renderLiveCard(
-      { state: s.state, title: s.current?.title ?? null, performer: s.current?.performer ?? null, queueLen: s.queue.length, version: s.version },
+      {
+        state: s.state,
+        title: s.current?.title ?? null,
+        performer: s.current?.performer ?? null,
+        queueLen: s.queue.length,
+        version: s.version,
+        loopMode: s.loopMode,
+        volume: s.volume,
+      },
       locale,
     );
   }
@@ -66,7 +83,13 @@ export class StreamFlow {
     const s = this.queues.get(chatId);
     const c = this.card(chatId, locale);
     if (s.liveCard) {
-      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: s.liveCard.messageId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive");
+      try {
+        await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: s.liveCard.messageId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive");
+      } catch (e) {
+        this.log.warn("failed editing live card — sending new", { error: (e as Error).message });
+        const id = await msgId(this.sender.enqueue("sendMessage", { chat_id: chatId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive"));
+        this.queues.setLiveCard(chatId, { chatId, messageId: id });
+      }
     } else {
       const id = await msgId(this.sender.enqueue("sendMessage", { chat_id: chatId, text: c.text, parse_mode: "Markdown", reply_markup: c.reply_markup }, "interactive"));
       this.queues.setLiveCard(chatId, { chatId, messageId: id });
@@ -79,7 +102,7 @@ export class StreamFlow {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.dm", {}, locale) }, "interactive");
       return;
     }
-    if (!this.alphaChats.includes(chatId)) {
+    if (!this.isAllowedChat(chatId, userId)) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.not_enabled", {}, locale) }, "interactive");
       return;
     }
@@ -123,8 +146,8 @@ export class StreamFlow {
   }
 
   /** Resolve the head of the queue fresh and tell the worker to play it. */
-  private async startNext(chatId: number, locale: string): Promise<void> {
-    const next = this.queues.advance(chatId);
+  private async startNext(chatId: number, locale: string, naturalEnd = false): Promise<void> {
+    const next = this.queues.advance(chatId, { naturalEnd });
     if (!next) {
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
       this.queues.reset(chatId);
@@ -140,7 +163,7 @@ export class StreamFlow {
     }
     if (!mediaUrl) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_source", {}, locale) }, "interactive");
-      await this.startNext(chatId, locale); // skip the dud, keep the party going
+      await this.startNext(chatId, locale, false); // skip the dud, keep the party going
       return;
     }
     const track: StreamTrack = { title: next.title, performer: next.performer ?? null, url: mediaUrl, duration: next.duration ?? null };
@@ -155,7 +178,7 @@ export class StreamFlow {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
       return;
     }
-    await this.startNext(chatId, locale);
+    await this.startNext(chatId, locale, false);
   }
 
   /** /stop — admins only. Leaves the call, clears everything. */
@@ -190,6 +213,35 @@ export class StreamFlow {
     await this.showCard(chatId, locale);
   }
 
+  /** /volume <0-200> — admins only. */
+  async volume(chatId: number, userId: number, rawLevel: string, locale = "en"): Promise<void> {
+    if (!(await this.isAdmin(chatId, userId))) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
+      return;
+    }
+    const num = Number.parseInt(rawLevel.trim(), 10);
+    if (Number.isNaN(num) || num < 0 || num > 200) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.volume.invalid", {}, locale) }, "interactive");
+      return;
+    }
+    const vol = this.queues.setVolume(chatId, num);
+    await this.bus.publish(buildCmd("stream.volume", chatId, { level: vol })).catch(() => {});
+    await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.volume.set", { v: vol }, locale) }, "interactive");
+    await this.showCard(chatId, locale);
+  }
+
+  /** /loop — admins only. */
+  async loop(chatId: number, userId: number, locale = "en"): Promise<void> {
+    if (!(await this.isAdmin(chatId, userId))) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
+      return;
+    }
+    const mode = this.queues.cycleLoopMode(chatId);
+    const key = mode === "track" ? "stream.loop.track" : mode === "queue" ? "stream.loop.queue" : "stream.loop.off";
+    await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t(key, {}, locale) }, "interactive");
+    await this.showCard(chatId, locale);
+  }
+
   /** /queue — anyone in the group can view. */
   async viewQueue(chatId: number, locale = "en"): Promise<void> {
     const s = this.queues.get(chatId);
@@ -200,7 +252,7 @@ export class StreamFlow {
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: renderQueue(s.current, s.queue, locale), parse_mode: "Markdown" }, "interactive");
   }
 
-  /** Transport buttons (sp/sr/ss/sx). Target carries the card version. */
+  /** Transport buttons (sp/sr/ss/sx/slp/svl/sqe). Target carries the card version. */
   private check(target: string, chatId: number): boolean {
     const m = /^v(\d+)$/.exec(target);
     return m !== null && Number(m[1]) === this.queues.get(chatId).version;
@@ -227,7 +279,7 @@ export class StreamFlow {
   async buttonSkip(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
-    await this.startNext(chatId, locale);
+    await this.startNext(chatId, locale, false);
     return "ok";
   }
 
@@ -240,10 +292,33 @@ export class StreamFlow {
     return "ok";
   }
 
+  async buttonVolume(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    const nextVol = this.queues.cycleVolume(chatId);
+    await this.bus.publish(buildCmd("stream.volume", chatId, { level: nextVol })).catch(() => {});
+    await this.showCard(chatId, locale);
+    return "ok";
+  }
+
+  async buttonLoop(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    this.queues.cycleLoopMode(chatId);
+    await this.showCard(chatId, locale);
+    return "ok";
+  }
+
+  async buttonQueue(chatId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    await this.viewQueue(chatId, locale);
+    return "ok";
+  }
+
   /** Worker events → state + live card. Unknown chats are ignored. */
   async onEvent(evt: StreamEvt, locale = "en"): Promise<void> {
     const chatId = evt.chatId;
-    if (!this.alphaChats.includes(chatId)) return;
+    if (!this.isAllowedChat(chatId)) return;
     const s = this.queues.get(chatId);
     switch (evt.name) {
       case "call.joined":
@@ -253,7 +328,7 @@ export class StreamFlow {
         break;
       case "track.ended":
         if (s.state === "idle") return;
-        await this.startNext(chatId, locale);
+        await this.startNext(chatId, locale, true);
         break;
       case "paused":
         this.queues.setState(chatId, "paused");
@@ -278,3 +353,4 @@ export class StreamFlow {
     }
   }
 }
+

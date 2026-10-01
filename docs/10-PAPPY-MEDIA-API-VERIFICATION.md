@@ -56,3 +56,19 @@ npm i -g pappy-media-api && pappy-media-api doctor \
 5. **Redact signed URLs** from all logs/errors we persist or display.
 
 Net: engine = strong adopt. Security boundary = ours. The P0 must be fixed (upstream or wrapper) before any user-supplied URL touches it in prod.
+
+## Addendum 2026-10-01 — 0.7.0 (bumped, verified by diff + executed re-proof)
+
+**What shipped:** 520-platform detector registry, `music.js` (iTunes 30s + SoundCloud full-track + Archive + YouTube),
+categorized `searchMovies` (Archive PD films + YouTube, incl. adult-gated `18+_movies`/`18+_anime` keyword categories),
+generic web extractor, DRM/Auth honest refusals (`success:false` + typed `error.code`, empty media by design),
+normalized output schema with legacy `data`/`engine` passthrough (adapter-compatible).
+
+**Security re-verification (executed):** `lib/util.js` and `lib/download.js` are byte-identical to 0.6.7 —
+**the P0 is NOT fixed upstream** (`[::ffff:127.0.0.1]` re-proven to sail through `resolve()`).
+Our guard remains the boundary; the adapter now also maps Tier D/E outcomes to `AUTH_REQUIRED`/`ACCESS_RESTRICTED`
+instead of feeding empty media to the manifest parser. 18+ categories are keyword queries over the same legal
+sources (Archive + YouTube) — low legal risk, but the adapter exposes no adult flag until our 18+ policy ships (X15).
+`adult_enabled:false` engine default preserved for non-movie paths.
+
+**Decision:** pin bumped 0.6.7 → 0.7.0. Strict improvement, zero security regression (identical gate + our wrapper holds).

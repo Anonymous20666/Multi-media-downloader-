@@ -4,7 +4,7 @@
   "mtprotoLayer": { "approx": 158, "note": "From Pyrogram raw docs at audit time; re-check on library bump" },
   "engines": {
     "ntgcalls": { "series": "2.x", "status": "active Sep 2026" },
-    "pappy-media-api": { "pinned": "0.6.7", "note": "ADR-05: adopt with guardrails; P0 SSRF fixed at our layer, upstream fix pending" }
+    "pappy-media-api": { "pinned": "0.7.0", "note": "ADR-05: adopt with guardrails; P0 SSRF still present upstream at 0.7.0 (re-proven), fixed at our layer" }
   },
   "processes": {
     "botApiChangelogWatch": "monthly",

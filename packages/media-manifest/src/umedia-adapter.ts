@@ -12,10 +12,10 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { UMedia, UMediaError } from "pappy-media-api";
+import { UMedia, UMediaError, Codes } from "pappy-media-api";
 import { assertSafeUrl, safeFetch, redactUrl, type SafeFetchOpts } from "./ssrf.js";
 import { parseManifest, type MediaManifest } from "./manifest.js";
-import type { MediaProvider, ProviderAttempt, ProviderCapabilities, ResolveResult } from "./provider.js";
+import type { MediaProvider, ProviderAttempt, ProviderCapabilities, ResolveResult, SearchItem } from "./provider.js";
 
 const DIRECT_MEDIA = /\.(mp4|webm|m4a|mp3|aac|wav|jpg|jpeg|png|gif|webp|mov|mkv)(\?|#|$)/i;
 
@@ -76,7 +76,20 @@ export class UmediaAdapter implements MediaProvider {
   async resolve(url: string): Promise<ResolveResult> {
     const safe = await assertSafeUrl(url, this.fetchOpts);
     try {
-      const r = await this.engine.resolve(safe.href);
+      const r = (await this.engine.resolve(safe.href)) as {
+        success?: boolean;
+        error?: { code?: string; message?: string };
+        data: Record<string, unknown>;
+        engine?: { attempts?: ProviderAttempt[] };
+      };
+      // 0.7.0 Tier D/E honest outcomes: DRM / auth-required. Map to typed errors
+      // (their data.media is empty by design — never force it through the manifest).
+      if (r.success === false) {
+        const code = r.error?.code === "AUTH_REQUIRED" ? Codes.AUTH_REQUIRED : Codes.ACCESS_RESTRICTED;
+        throw new UMediaError(code, r.error?.message ?? "Source refused extraction", {
+          attempts: (r.engine?.attempts ?? []) as ProviderAttempt[],
+        });
+      }
       const d = r.data as Record<string, unknown>;
       const media = (d["media"] as Array<Record<string, unknown>>).map((m, i) => ({
         type: m["type"],
@@ -114,6 +127,38 @@ export class UmediaAdapter implements MediaProvider {
         error: a.error,
       }));
       return { manifest, attempts };
+    } catch (e) {
+      throw redactError(e);
+    }
+  }
+
+  /**
+   * Music search (0.7.0 music module: iTunes 30s + SoundCloud full-track + Archive + YouTube).
+   * Query text has no SSRF surface; results are normalized + redacted like everything else.
+   * NOTE: 18+ stays OFF — the adapter exposes no adult flag until our policy ships (X15).
+   */
+  async searchMusic(q: string, limit = 10): Promise<{ items: SearchItem[]; attempts: ProviderAttempt[] }> {
+    const query = String(q ?? "").trim().slice(0, 200);
+    if (!query) throw new UMediaError(Codes.INVALID_REQUEST, "searchMusic(q) — q is required");
+    try {
+      const r = await this.engine.searchMusic({ q: query, limit });
+      const items: SearchItem[] = (r.data.items ?? []).map((m) => ({
+        id: String(m.id ?? m.pageUrl ?? query),
+        title: String(m.title ?? "Unknown"),
+        author: m.artist ?? null,
+        pageUrl: m.pageUrl ?? null,
+        thumbnail: m.thumbnail ?? null,
+        duration: m.duration ?? null,
+        previewUrl: m.previewUrl ?? null,
+        previewKind: m.previewKind ?? null,
+      }));
+      const attempts: ProviderAttempt[] = (r.engine?.attempts ?? []).map((a) => ({
+        provider: `umedia/${a.provider}`,
+        status: a.status,
+        latencyMs: a.latencyMs ?? undefined,
+        error: a.error ?? undefined,
+      }));
+      return { items, attempts };
     } catch (e) {
       throw redactError(e);
     }

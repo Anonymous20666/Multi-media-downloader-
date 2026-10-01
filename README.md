@@ -3,8 +3,9 @@
 Search → Choose → Play / Download / Stream. Underneath: Bot API + MTProto + user
 sessions + providers + queues + workers + AI + streaming engine + persistent state.
 
-**Status: Foundation (see `docs/00-PAPPY-OMEGA-MASTER-PLAN.md` §T).** `/start` hub,
-throttled sender, SSRF guard, manifest v1, provider adapter. V1 next.
+**Status: V1 slice 1 (see `docs/00-PAPPY-OMEGA-MASTER-PLAN.md` §T).** Music search →
+detail → guarded download → audio delivery + `file_id` reuse. Next: URL galleries,
+playlists, force-join.
 
 ## Quickstart (VPS)
 

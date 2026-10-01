@@ -6,11 +6,22 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { serve } from "@hono/node-server";
+import { ProviderManager, UmediaAdapter } from "@pappy/media-manifest";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { Sender } from "./telegram/sender.js";
 import { createApiCall, setupBot } from "./bot/setup.js";
+import { MusicFlow } from "./bot/music.js";
+import { FileIdCache, SearchSessions } from "./state/stores.js";
 import { createHealthApp } from "./health.js";
+
+/**
+ * Upload ceiling: hosted Bot API caps the request body at 52,428,800 bytes
+ * (48 MB headroom); a local server raises it to 2000 MB (1900 MB headroom).
+ */
+export function maxUploadBytesFor(botApiRoot: string | null): number {
+  return botApiRoot ? 1900 * 1024 * 1024 : 48 * 1024 * 1024;
+}
 
 const require = createRequire(import.meta.url);
 // telegram-versions.json lives at repo root; dist layout is apps/controller/dist.
@@ -40,12 +51,18 @@ async function main(): Promise<void> {
       ownerConfigured: cfg.ownerIds.length > 0,
     });
   } else {
-    const call = createApiCall(cfg);
-    const live = new Sender(call);
-    // Rebind health/metrics to the live sender by swapping internals is overkill in
-    // Foundation — the live sender's stats are what matters once the bot runs.
-    void sender;
-    const bot = setupBot(cfg, live, log);
+    const adapter = new UmediaAdapter();
+    const manager = new ProviderManager([adapter]);
+    const music = new MusicFlow({
+      manager,
+      adapter,
+      sender,
+      sessions: new SearchSessions(),
+      fileIds: new FileIdCache(),
+      log,
+      maxUploadBytes: maxUploadBytesFor(cfg.botApiRoot),
+    });
+    const bot = setupBot(cfg, sender, log, music);
     log.info("starting bot (long-polling)", { localBotApi: Boolean(cfg.botApiRoot) });
     bot.start({ onStart: (me) => log.info("bot online", { username: me.username }) });
     const shutdown = async (sig: string) => {

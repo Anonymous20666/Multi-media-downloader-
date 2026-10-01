@@ -5,7 +5,7 @@
   "type": "module",
   "workspaces": ["apps/controller", "packages/media-manifest"],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build -w @pappy/media-manifest && npm run build -w @pappy/controller",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run build -w @pappy/media-manifest && npm run test --workspaces",
     "dev": "npm run dev -w @pappy/controller"

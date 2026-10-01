@@ -173,15 +173,53 @@ export class UmediaAdapter implements MediaProvider {
     if (!DIRECT_MEDIA.test(safe.href.split("#")[0])) {
       throw new Error("downloadDirect only handles direct media URLs — resolve platform URLs first");
     }
-    await mkdir(jobDir, { recursive: true });
     const seg = safe.pathname.split("/").pop() || "media";
-    const name = `001 - ${cleanName(decodeURIComponent(seg).split("?")[0])}`;
-    const dest = path.join(jobDir, name);
+    return this.fetchMediaUrl(safe.href, jobDir, decodeURIComponent(seg).split("?")[0]);
+  }
+
+  /**
+   * Guarded media fetch: ANY validated media URL (direct files AND signed/extensionless
+   * CDN URLs from manifests). Re-validates DNS, follows redirects manually with caps,
+   * writes to a per-job dir. Extension is detected, never assumed.
+   */
+  async fetchMediaUrl(url: string, jobDir: string, titleHint = "media"): Promise<{ path: string; bytes: number; finalUrl: string; mimeType: string | null }> {
+    const safe = await assertSafeUrl(url, this.fetchOpts);
+    await mkdir(jobDir, { recursive: true });
     const res = await safeFetch(safe.href, this.fetchOpts);
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`HTTP ${res.status} fetching media`);
     }
+    const mime = (res.headers.get("content-type") || "").split(";")[0].trim() || null;
+    const ext = guessExt(safe.pathname, mime);
+    const name = `001 - ${cleanName(titleHint)}.${ext}`;
+    const dest = path.join(jobDir, name);
     await writeFile(dest, res.bytes);
-    return { path: dest, bytes: res.bytes.byteLength, finalUrl: res.url };
+    return { path: dest, bytes: res.bytes.byteLength, finalUrl: res.url, mimeType: mime };
   }
+}
+
+const MIME_EXT: Record<string, string> = {
+  "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "audio/aac": "aac",
+  "audio/ogg": "ogg",
+  "audio/opus": "opus",
+  "audio/wav": "wav",
+  "audio/webm": "webm",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+function guessExt(pathname: string, mime: string | null): string {
+  const m = /\.([a-z0-9]{2,5})$/.exec(pathname.split("?")[0]);
+  if (m && /^(mp4|webm|m4a|mp3|aac|wav|ogg|opus|jpg|jpeg|png|gif|webp|mov|mkv)$/.test(m[1].toLowerCase())) {
+    return m[1].toLowerCase();
+  }
+  if (mime && MIME_EXT[mime]) return MIME_EXT[mime];
+  return "bin";
 }

@@ -8,32 +8,36 @@ import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import { t } from "../i18n/index.js";
 import { FloodWait, RetryableUpstream, Sender, type ApiCall } from "../telegram/sender.js";
+import { encodeParams } from "../telegram/uploads.js";
 import { renderHubFallback, renderHubRich, unpackCb } from "../ui/components.js";
+import type { MusicFlow } from "./music.js";
 
 export function createApiCall(cfg: Config): ApiCall {
   const root = (cfg.botApiRoot ?? "https://api.telegram.org").replace(/\/$/, "");
   const token = cfg.botToken;
   if (!token) throw new Error("BOT_TOKEN required for ApiCall");
   return async (method: string, params: Record<string, unknown>) => {
+    const { multipart, body: reqBody } = encodeParams(params);
     const res = await fetch(`${root}/bot${token}/${method}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params),
+      // Multipart: let fetch set the boundary. JSON: explicit content-type.
+      headers: multipart ? {} : { "content-type": "application/json" },
+      body: reqBody as string | FormData,
     });
-    let body: { ok?: boolean; result?: unknown; description?: string; parameters?: { retry_after?: number } } = {};
+    let payload: { ok?: boolean; result?: unknown; description?: string; parameters?: { retry_after?: number } } = {};
     try {
-      body = (await res.json()) as typeof body;
+      payload = (await res.json()) as typeof payload;
     } catch {
       /* non-JSON upstream */
     }
-    if (res.status === 429) throw new FloodWait(Number(body.parameters?.retry_after ?? 1));
-    if (res.status >= 500 && res.status < 600) throw new RetryableUpstream(`Telegram ${res.status}: ${body.description ?? "upstream"}`);
-    if (!res.ok || body.ok === false) throw new Error(`Telegram ${res.status}: ${body.description ?? "request failed"}`);
-    return body.result;
+    if (res.status === 429) throw new FloodWait(Number(payload.parameters?.retry_after ?? 1));
+    if (res.status >= 500 && res.status < 600) throw new RetryableUpstream(`Telegram ${res.status}: ${payload.description ?? "upstream"}`);
+    if (!res.ok || payload.ok === false) throw new Error(`Telegram ${res.status}: ${payload.description ?? "request failed"}`);
+    return payload.result;
   };
 }
 
-export function setupBot(cfg: Config, sender: Sender, log: Logger): Bot {
+export function setupBot(cfg: Config, sender: Sender, log: Logger, music: MusicFlow): Bot {
   if (!cfg.botToken) throw new Error("BOT_TOKEN required");
   const bot = new Bot(cfg.botToken, cfg.botApiRoot ? { client: { apiRoot: cfg.botApiRoot } } : {});
   const t0 = Date.now();
@@ -58,11 +62,37 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger): Bot {
     await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: `${t("ping.pong")} · up ${up}s` }, "interactive");
   });
 
+  bot.command("music", async (ctx) => {
+    if (!ctx.chatId) return;
+    const q = (ctx.message?.text ?? "").replace(/^\/music(@\w+)?\s*/, "");
+    await music.search(ctx.chatId, q);
+  });
+
   bot.on("callback_query:data", async (ctx) => {
     const parsed = unpackCb(ctx.callbackQuery.data);
-    await ctx.answerCallbackQuery().catch(() => {});
-    if (!parsed || !ctx.chatId || !ctx.callbackQuery.message) return;
-    // Foundation: hub sections render honest "V1 scope" cards (no fake functionality).
+    const cqId = ctx.callbackQuery.id;
+    // Acks ride the control lane (fast, still throttled — never a retry storm).
+    await sender.enqueue("answerCallbackQuery", { callback_query_id: cqId }, "control").catch(() => {});
+    if (!parsed || !ctx.chatId) return;
+    const messageId = ctx.callbackQuery.message?.message_id;
+    if (parsed.action === "ms" && messageId) {
+      await music.select(ctx.chatId, messageId, parsed.target);
+      return;
+    }
+    if (parsed.action === "md" && messageId) {
+      await music.download(ctx.chatId, messageId, parsed.target);
+      return;
+    }
+    if (parsed.action === "mx" && messageId) {
+      await music.cancel(ctx.chatId, messageId);
+      return;
+    }
+    if (parsed.action === "mq") {
+      await sender.enqueue("answerCallbackQuery", { callback_query_id: cqId, text: t("music.queue.soon"), show_alert: false }, "control").catch(() => {});
+      return;
+    }
+    if (!ctx.callbackQuery.message) return;
+    // Hub sections render honest scope cards until their slice lands.
     if (parsed.action === "hub") {
       const label = parsed.target;
       await sender.enqueue(
@@ -80,9 +110,15 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger): Bot {
   });
 
   bot.on("message:text", async (ctx) => {
-    if (ctx.message.text.startsWith("/")) return; // unknown command — ignore quietly in Foundation
-    if (ctx.chat?.type !== "private") return;
-    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("start.hub.body") }, "interactive").catch(() => {});
+    if (ctx.message.text.startsWith("/")) return; // unknown command — ignore quietly
+    if (ctx.chat?.type !== "private" || !ctx.chatId) return;
+    const text = ctx.message.text.trim();
+    // Slice 1: free text = music search. URL flow + disambiguation land in slice 2.
+    if (/^https?:\/\//i.test(text)) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("music.url.soon") }, "interactive").catch(() => {});
+      return;
+    }
+    await music.search(ctx.chatId, text);
   });
 
   bot.catch((err) => {

@@ -8,7 +8,8 @@ import { t } from "../i18n/index.js";
 
 // --- callback data: 64-byte budget (§57). Format: v1.<action>.<target>.<version>.<nonce> ---
 export function packCb(action: string, target: string, version: number): string {
-  const nonce = Math.random().toString(36).slice(2, 8);
+  // Padded: toString(36) fractions can be short; unpackCb requires exactly 6.
+  const nonce = (Math.random().toString(36).slice(2) + "000000").slice(0, 6);
   const data = `v1.${action}.${target}.${version}.${nonce}`;
   if (data.length > 64) throw new Error(`callback_data exceeds 64 bytes: ${data}`);
   return data;

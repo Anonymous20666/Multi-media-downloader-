@@ -11,6 +11,7 @@ export function createHealthApp(cfg: Config, sender: Sender, versions: unknown) 
       mode: cfg.botToken ? "bot" : "doctor",
       localBotApi: Boolean(cfg.botApiRoot),
       ownerConfigured: cfg.ownerIds.length > 0,
+      streamAlphaGroups: cfg.streamAlphaChats.length,
       versions,
     }),
   );

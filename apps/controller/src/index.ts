@@ -15,6 +15,7 @@ import { DeliveryService } from "./bot/delivery.js";
 import { MusicFlow } from "./bot/music.js";
 import { UrlFlow } from "./bot/urls.js";
 import { InlineFlow } from "./bot/inline.js";
+import { StreamFlow } from "./bot/stream.js";
 import { LibraryFlow } from "./bot/library-flow.js";
 import { BanList, ForceJoin, Origins } from "./bot/guards.js";
 import { Presence } from "./bot/presence.js";
@@ -24,6 +25,8 @@ import { OwnerFlow } from "./bot/owner.js";
 import { Library } from "./state/library.js";
 import { CancelRegistry } from "./state/cancel.js";
 import { FileIdCache, ManifestSessions, SearchSessions, UserPrefs, UsersSeen } from "./state/stores.js";
+import { InMemoryBus, RedisStreamBus, type StreamBus } from "./stream/bus.js";
+import { StreamQueues } from "./stream/queue.js";
 import { createHealthApp } from "./health.js";
 
 /**
@@ -70,6 +73,7 @@ async function main(): Promise<void> {
       localBotApi: Boolean(cfg.botApiRoot),
       botApiVersion: (versions as { botApi?: { version?: string } }).botApi?.version,
       ownerConfigured: cfg.ownerIds.length > 0,
+      streamAlphaGroups: cfg.streamAlphaChats.length,
     });
   } else {
     const adapter = new UmediaAdapter();
@@ -94,10 +98,18 @@ async function main(): Promise<void> {
     const origins = new Origins();
     const seen = new UsersSeen();
     const inline = new InlineFlow(manager, bans, forcejoin, share, log);
+    const streamBus: StreamBus = cfg.redisUrl
+      ? await RedisStreamBus.connect(cfg.redisUrl, log).catch((e) => {
+          log.warn("stream bus unavailable — DJ honestly offline", { error: (e as Error).message });
+          return new InMemoryBus();
+        })
+      : new InMemoryBus();
+    const stream = new StreamFlow(manager, sender, streamBus, new StreamQueues(), cfg.streamAlphaChats, log);
+    streamBus.onEvent((evt) => void stream.onEvent(evt).catch((e) => log.warn("stream event failed", { error: (e as Error).message })));
     const settings = new SettingsFlow(sender, prefs);
     const libraryFlow = new LibraryFlow(sender, library, log);
     const owner = new OwnerFlow(sender, manager, forcejoin, bans, seen, log);
-    const bot = setupBot(cfg, sender, log, { music, urls, inline, libraryFlow, forcejoin, bans, origins, presence, share, settings, owner, prefs, seen });
+    const bot = setupBot(cfg, sender, log, { music, urls, inline, stream, libraryFlow, forcejoin, bans, origins, presence, share, settings, owner, prefs, seen });
 
     // Identity (powers share links) + command menu. Best-effort: the bot works
     // without either, just with fewer shortcuts.
@@ -127,6 +139,7 @@ async function main(): Promise<void> {
     const shutdown = async (sig: string) => {
       log.info("shutting down", { sig });
       await bot.stop();
+      await streamBus.close().catch(() => {});
       server.close();
       process.exit(0);
     };

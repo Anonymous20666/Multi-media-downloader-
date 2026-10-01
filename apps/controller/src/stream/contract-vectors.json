@@ -1,0 +1,42 @@
+{
+  "cmds": [
+    {
+      "v": 1,
+      "id": "cmd_vec_play",
+      "type": "stream.play",
+      "streamId": "stm_-100123",
+      "chatId": -100123,
+      "track": { "title": "Fall Back", "performer": "Lithe", "url": "https://cdn.example/x.mp3", "duration": 187 },
+      "idempotencyKey": "idem_vec_play"
+    },
+    {
+      "v": 1,
+      "id": "cmd_vec_vol",
+      "type": "stream.volume",
+      "streamId": "stm_-100123",
+      "chatId": -100123,
+      "level": 120,
+      "idempotencyKey": "idem_vec_vol"
+    }
+  ],
+  "evts": [
+    {
+      "v": 1,
+      "type": "evt",
+      "name": "track.started",
+      "streamId": "stm_-100123",
+      "chatId": -100123,
+      "track": { "title": "Fall Back", "performer": "Lithe", "url": "https://cdn.example/x.mp3", "duration": 187 },
+      "ts": 1788192000
+    },
+    {
+      "v": 1,
+      "type": "evt",
+      "name": "error",
+      "streamId": "stm_-100123",
+      "chatId": -100123,
+      "error": { "code": "JOIN_FAILED", "message": "GROUPCALL_FORBIDDEN" },
+      "ts": 1788192001
+    }
+  ]
+}

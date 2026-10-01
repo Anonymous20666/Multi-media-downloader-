@@ -8,11 +8,19 @@ detail → download + `file_id` reuse, paste-a-link galleries with capped batch 
 playlists/favorites/history, force-join + bans, settings, owner console, load
 harness. Feel layer: albums, inline mode with 30s previews, typing/upload indicators
 + reactions, share deep-links, real cancel, quoted replies, command menu.
-Next: VPS verification, then V1.5 streaming alpha.
+V1.5 streaming alpha: group-call DJ (`/play` `/skip` `/stop` `/pause` `/resume`
+`/queue` in flagged groups) — TS controller owns queue+UX, Python worker
+(py-tgcalls + ntgcalls + pyrofork) plays via an assistant user-session over a
+versioned Redis contract. Live-call verification happens on the VPS game-day.
+Next: VPS verification (worker boot, 24h stream, induced failures).
 
 > BotFather setup for the feel layer: enable **Inline Mode** (`/setinline`) with a
 > placeholder like `Search songs…`, so `@<bot> <song>` works in any chat.
 > Everything else (menu button, commands) registers itself on boot.
+>
+> BotFather setup for the group DJ: `/setjoingroups` → enable, `/setprivacy` →
+> disable (so `/play` reaches the bot without `@mentions`), then add the bot +
+> the assistant account to the flagged group (assistant needs *Manage Voice Chats*).
 
 ## Quickstart (VPS)
 

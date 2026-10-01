@@ -4,6 +4,7 @@
  * typings lag new Bot API methods (X10/Q5). Any rich failure → fallback.
  *
  * V1 routes: music search, paste-a-link galleries, library, settings, owner.
+ * V1.5 alpha: group-call DJ (/play /skip /stop /pause /resume /queue) in flagged groups.
  * Provider-costing actions pass the gate (bans + force-join); local reads don't.
  * Feel layer: inline mode everywhere, deep-link /start payloads, 👀 on receipt,
  * quoted replies, alert-toasts for real errors (not silent toasts).
@@ -18,6 +19,7 @@ import { renderHubFallback, renderHubRich, unpackCb } from "../ui/components.js"
 import type { MusicFlow } from "./music.js";
 import { isHttpUrl, type UrlFlow } from "./urls.js";
 import type { InlineFlow } from "./inline.js";
+import type { StreamFlow } from "./stream.js";
 import type { LibraryFlow } from "./library-flow.js";
 import { BanList, ForceJoin, Origins, renderJoinCard } from "./guards.js";
 import type { Presence } from "./presence.js";
@@ -55,6 +57,7 @@ export interface BotFlows {
   music: MusicFlow;
   urls: UrlFlow;
   inline: InlineFlow;
+  stream: StreamFlow;
   libraryFlow: LibraryFlow;
   forcejoin: ForceJoin;
   bans: BanList;
@@ -276,6 +279,43 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.done") }, "interactive").catch(() => {});
   });
 
+  // --- V1.5 alpha: group-call DJ (gates live in the flow: group → flagged → admin → worker) ---
+  bot.command("play", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    await flows.stream.play(ctx.chatId, ctx.from.id, argText(ctx.message?.text ?? "", "play"), ctx.chat?.type ?? "private");
+  });
+
+  bot.command("skip", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    await flows.stream.skip(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("stop", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    await flows.stream.stop(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("pause", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    await flows.stream.pause(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("resume", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    await flows.stream.resume(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command("queue", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    await flows.stream.viewQueue(ctx.chatId);
+  });
+
   bot.on("inline_query", async (ctx) => {
     const q = ctx.inlineQuery;
     flows.seen.record(q.from.id);
@@ -350,6 +390,22 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "fr":
           if (messageId) await flows.libraryFlow.unfav(chatId, messageId, userId, parsed.target);
           break;
+        case "sp":
+        case "sr":
+        case "ss":
+        case "sx": {
+          const r =
+            parsed.action === "sp"
+              ? await flows.stream.buttonPause(chatId, userId, parsed.target)
+              : parsed.action === "sr"
+                ? await flows.stream.buttonResume(chatId, userId, parsed.target)
+                : parsed.action === "ss"
+                  ? await flows.stream.buttonSkip(chatId, userId, parsed.target)
+                  : await flows.stream.buttonStop(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          break;
+        }
         case "fj":
           if (!messageId) break;
           await handleVerify(chatId, messageId, userId, parsed.target);

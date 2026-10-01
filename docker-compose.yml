@@ -57,6 +57,17 @@ services:
       redis: { condition: service_healthy }
     restart: unless-stopped
 
+  # Group-call DJ engine (ADR-02). Crash-only: exits loud without a session.
+  stream-worker:
+    build:
+      context: ./workers/stream-py
+    env_file: [.env]
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: on-failure:5
+
 volumes:
   pgdata:
   redisdata:

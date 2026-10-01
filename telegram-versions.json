@@ -3,7 +3,9 @@
   "botApi": { "version": "10.3", "released": "2026-08-24", "changelog": "https://core.telegram.org/bots/api-changelog" },
   "mtprotoLayer": { "approx": 158, "note": "From Pyrogram raw docs at audit time; re-check on library bump" },
   "engines": {
-    "ntgcalls": { "series": "2.x", "status": "active Sep 2026" },
+    "ntgcalls": { "pinned": "2.2.5", "status": "stable Jun 2026; 3.0.0rc2 available Sep 2026, not pinned" },
+    "py-tgcalls": { "pinned": "2.3.3", "note": "ADR-02 engine: high-level call SDK, API verified by introspection Oct 2026" },
+    "pyrofork": { "pinned": "2.3.69", "note": "ADR-02 MTProto client (Pyrogram-API-compatible, string sessions)" },
     "pappy-media-api": { "pinned": "0.7.0", "note": "ADR-05: adopt with guardrails; P0 SSRF still present upstream at 0.7.0 (re-proven), fixed at our layer" }
   },
   "processes": {

@@ -51,17 +51,18 @@ function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (
 }
 
 function sidOf(calls: Array<{ kb: string }>): string {
-  const m = /v1\.ms\.([a-z0-9]+):0\./.exec(calls.map((c) => c.kb).join(" "));
-  assert.ok(m, "expected an ms button with session id");
+  const m = /v1\.o1\.([a-z0-9]+):0\./.exec(calls.map((c) => c.kb).join(" "));
+  assert.ok(m, "expected an o1 button with session id");
   return m[1];
 }
 
-test("music search: verbose narrates, quiet goes straight to results", async () => {
+test("music search: verbose narrates, quiet goes straight to the option list", async () => {
   const h = harness();
   await h.flow.search(7, 9001, "lithe");
   assert.match(h.calls[0].text, /Searching/);
   assert.match(h.calls[1].text, /Fall Back/);
-  assert.match(h.calls[1].kb, /v1\.ms\./);
+  assert.match(h.calls[1].kb, /v1\.o1\./);
+  assert.match(h.calls[1].kb, /v1\.mx\./);
   assert.deepEqual(h.library.history(9001).searches, ["lithe"]);
 
   const q = harness();
@@ -70,6 +71,7 @@ test("music search: verbose narrates, quiet goes straight to results", async () 
   assert.equal(q.calls.length, 1);
   assert.equal(q.calls[0].method, "sendMessage");
   assert.match(q.calls[0].text, /Fall Back/);
+  assert.match(q.calls[0].kb, /v1\.o1\./);
 });
 
 test("music search quotes the user's message when replyTo is known", async () => {
@@ -82,53 +84,58 @@ test("music search quotes the user's message when replyTo is known", async () =>
   assert.deepEqual(q.calls[0].params["reply_parameters"], { message_id: 42 });
 });
 
-test("music select: detail card carries download + save + share; expired sessions say so", async () => {
+test("music select: options vanish, file metadata + attachments ride delivery", async () => {
   const h = harness({ username: "PappyDLBot" });
   await h.flow.search(7, 9001, "lithe");
   const sid = sidOf(h.calls);
-  await h.flow.select(7, 50, `${sid}:0`);
-  const detail = h.calls[h.calls.length - 1];
-  assert.match(detail.text, /Fall Back/);
-  assert.match(detail.kb, /v1\.md\./);
-  assert.match(detail.kb, /v1\.mf\./);
-  assert.match(detail.kb, /t\.me\/PappyDLBot\?start=m_/);
-  await h.flow.select(7, 50, "dead:0");
-  assert.match(h.calls[h.calls.length - 1].text, /expired/);
-});
-
-test("music download: delivery receipt + history; missing source is honest", async () => {
-  const h = harness();
-  await h.flow.search(7, 9001, "lithe");
-  const sid = sidOf(h.calls);
-  await h.flow.download(7, 60, 9001, `${sid}:0`);
+  await h.flow.select(7, 50, 9001, `${sid}:0`);
+  const methods = h.calls.map((c) => c.method);
+  assert.ok(methods.includes("deleteMessage"), "options card deleted");
   assert.equal(h.delivered.length, 1);
   assert.deepEqual([h.delivered[0]["key"], h.delivered[0]["kind"]], ["m1:audio", "audio"]);
+  assert.match(String(h.delivered[0]["caption"]), /Fall Back/);
+  assert.match(String(h.delivered[0]["caption"]), /Lithe/);
+  const kb = JSON.stringify(h.delivered[0]["replyMarkup"]);
+  assert.match(kb, /v1\.ds\./);
+  assert.match(kb, /v1\.dp\./);
+  assert.match(kb, /t\.me\/PappyDLBot\?start=m_/);
   assert.match(h.calls[h.calls.length - 1].text, /Ready/);
   assert.deepEqual(h.library.history(9001).downloads, ["Fall Back"]);
-  await h.flow.download(7, 60, 9001, `${sid}:1`);
-  assert.match(h.calls[h.calls.length - 1].text, /didn't expose/);
 });
 
-test("music download honors cancel before and during delivery", async () => {
+test("music select: expired sessions and sourceless items stay honest", async () => {
   const h = harness();
   await h.flow.search(7, 9001, "lithe");
   const sid = sidOf(h.calls);
-  h.cancels.cancel(7, 61);
-  await h.flow.download(7, 61, 9001, `${sid}:0`);
+  await h.flow.select(7, 50, 9001, "dead:0");
+  assert.match(h.calls[h.calls.length - 1].text, /expired/);
+  const before = h.calls.length;
+  await h.flow.select(7, 50, 9001, `${sid}:1`);
+  assert.match(h.calls[h.calls.length - 1].text, /didn't expose/);
+  assert.ok(!h.calls.slice(before).some((c) => c.method === "deleteMessage"), "sourceless tap keeps the card");
+  assert.equal(h.delivered.length, 0);
+});
+
+test("music select honors cancel before and during delivery", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  const sid = sidOf(h.calls);
+  h.cancels.cancel(7, 102); // status message id the select is about to create
+  await h.flow.select(7, 50, 9001, `${sid}:0`);
   assert.match(h.calls[h.calls.length - 1].text, /Cancelled/);
   assert.equal(h.delivered.length, 0);
 
   const h2 = harness({ deliverImpl: () => ({ status: "cancelled" }) });
   await h2.flow.search(7, 9001, "lithe");
-  await h2.flow.download(7, 62, 9001, `${sidOf(h2.calls)}:0`);
+  await h2.flow.select(7, 50, 9001, `${sidOf(h2.calls)}:0`);
   assert.match(h2.calls[h2.calls.length - 1].text, /Cancelled/);
 });
 
-test("music download maps auth-gated resolve to the gated card", async () => {
+test("music select maps auth-gated resolve to the gated card", async () => {
   const h = harness({ resolveImpl: () => { throw Object.assign(new Error("denied"), { code: "AUTH_REQUIRED" }); } });
   await h.flow.search(7, 9001, "lithe");
   const sid = sidOf(h.calls);
-  await h.flow.download(7, 60, 9001, `${sid}:0`);
+  await h.flow.select(7, 50, 9001, `${sid}:0`);
   assert.match(h.calls[h.calls.length - 1].text, /withheld/);
   assert.equal(h.delivered.length, 0);
 });
@@ -142,4 +149,11 @@ test("music save: queue + favorites; dead session returns false", async () => {
   assert.equal(h.library.listFavs(9001).length, 1);
   assert.equal(h.flow.save(9001, "dead:0"), false);
   assert.equal(h.flow.save(9001, `${sid}:1`), false); // no pageUrl → not saveable
+});
+
+test("music cancel: marks the registry and removes the card", async () => {
+  const h = harness();
+  await h.flow.cancel(7, 99);
+  assert.equal(h.cancels.isCancelled(7, 99), true);
+  assert.equal(h.calls[h.calls.length - 1].method, "deleteMessage");
 });

@@ -68,6 +68,50 @@ export function renderMusicError(query: string, locale = "en"): FallbackMessage 
   };
 }
 
+/**
+ * M1 unified option list: numbered rows, one tap per result (o1), ✕ to bail.
+ * Tap deletes this card; the file arrives with full metadata + attachments.
+ */
+export function renderMusicOptions(query: string, sessionId: string, items: SearchItem[], locale = "en"): FallbackMessage {
+  const lines = [`*${t("music.options.title", {}, locale)}* — _${escapeMd(query.slice(0, 60))}_`, ""];
+  items.forEach((it, i) => {
+    const dur = fmtDuration(it.duration);
+    lines.push(`${i + 1}. *${escapeMd(it.title)}*${it.author ? ` — ${escapeMd(it.author)}` : ""}${dur ? ` · \`${dur}\`` : ""}`);
+  });
+  const keyboard = items.map((it, i) => [{ text: `${i + 1}. ${(it.title ?? "").slice(0, 28)}`, callback_data: packCb("o1", `${sessionId}:${i}`, 1) }]);
+  keyboard.push([{ text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) }]);
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: keyboard } };
+}
+
+/** M1 file attachments: caption metadata + Stream it / Playlist / Share. */
+export function renderMusicAttachment(
+  sessionId: string,
+  idx: number,
+  it: SearchItem,
+  locale = "en",
+  shareUrl?: string | null,
+): { caption: string; reply_markup: unknown } {
+  const dur = fmtDuration(it.duration);
+  const meta = [it.author ? escapeMd(it.author) : "", dur ? `\`${dur}\`` : "", it.previewKind ? escapeMd(it.previewKind) : ""].filter(Boolean).join(" · ");
+  return {
+    caption: `🎵 *${escapeMd(it.title)}*${meta ? `\n${meta}` : ""}`,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: t("music.att.stream", {}, locale), callback_data: packCb("ds", `${sessionId}:${idx}`, 1) },
+          { text: t("music.att.playlist", {}, locale), callback_data: packCb("dp", `${sessionId}:${idx}`, 1) },
+        ],
+        ...(shareUrl ? [[{ text: t("common.share", {}, locale), url: shareUrl }]] : []),
+      ],
+    },
+  };
+}
+
+/** ✕ row for the in-flight status message (cancel really stops the work). */
+export function renderStatusCancel(sessionId: string, locale = "en"): { inline_keyboard: KbButton[][] } {
+  return { inline_keyboard: [[{ text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) }]] };
+}
+
 function escapeMd(s: string): string {
   return String(s).replace(/([_*[\\]()~`>#+\\-=|{}.!])/g, "\\$1").slice(0, 200);
 }

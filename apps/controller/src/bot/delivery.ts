@@ -30,6 +30,8 @@ export interface DeliverOpts {
   duration?: number;
   caption?: string;
   fileName?: string;
+  /** Inline keyboard attached to the media message (M1 metadata attachments). */
+  replyMarkup?: unknown;
   /** Long-flow cancellation (✕ button). Checked before each network send. */
   signal?: () => boolean;
 }
@@ -102,15 +104,19 @@ export class DeliveryService {
     this.jobRoot = deps.jobRoot ?? path.join(tmpdir(), "pappy-jobs");
   }
 
-  private baseParams(kind: DeliverKind, o: { title?: string; performer?: string; duration?: number; caption?: string }): Record<string, unknown> {
+  private baseParams(kind: DeliverKind, o: { title?: string; performer?: string; duration?: number; caption?: string; replyMarkup?: unknown }): Record<string, unknown> {
     const base: Record<string, unknown> = {};
-    if (o.caption) base["caption"] = o.caption;
+    if (o.caption) {
+      base["caption"] = o.caption;
+      base["parse_mode"] = "Markdown";
+    }
     if (kind === "audio") {
       if (o.title) base["title"] = o.title;
       if (o.performer) base["performer"] = o.performer;
       if (o.duration != null) base["duration"] = o.duration;
     }
     if (kind === "video" && o.duration != null) base["duration"] = o.duration;
+    if (o.replyMarkup) base["reply_markup"] = o.replyMarkup;
     return base;
   }
 

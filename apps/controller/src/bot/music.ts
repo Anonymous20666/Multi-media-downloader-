@@ -1,7 +1,8 @@
 /**
- * Music: search → detail → guarded download → sendAudio.
- * Slice 2: downloads ride DeliveryService (shared with URLs), verbose pref gates
- * progress chatter, downloads land in history, ❤ saves to Queue + favorites.
+ * Music (M1-s1): search → unified option list → tap deletes options → file
+ * arrives with full metadata caption + Stream it / Playlist / Share.
+ * Downloads ride DeliveryService (shared with URLs), verbose pref gates
+ * progress chatter, downloads land in history, ➕ saves to Queue + favorites.
  * Feel layer: typing indicators, quoted replies, ✅/🔥/😢 reactions on your
  * message, share links, and a ✕ that really stops the work.
  * Decoupled from grammY ctx (plain IDs) so the whole flow is unit-testable.
@@ -15,7 +16,7 @@ import { DeliveryService } from "./delivery.js";
 import { Presence } from "./presence.js";
 import { ShareLinks } from "./share.js";
 import { mapResolveError } from "./urls.js";
-import { renderMusicDetail, renderMusicError, renderMusicResults } from "./music-ui.js";
+import { renderMusicAttachment, renderMusicError, renderMusicOptions, renderStatusCancel } from "./music-ui.js";
 import { Library } from "../state/library.js";
 import { CancelRegistry } from "../state/cancel.js";
 import { SearchSessions, UserPrefs } from "../state/stores.js";
@@ -97,7 +98,7 @@ export class MusicFlow {
         return;
       }
       const session = this.sessions.create(q, items);
-      const card = renderMusicResults(q, session.id, items, locale);
+      const card = renderMusicOptions(q, session.id, items, locale);
       await done(verbose ? `${renderProgress(q, "found", "", locale)}\n\n${card.text}` : card.text, card.reply_markup);
       if (replyTo) this.presence.react(chatId, replyTo, "✅");
     } catch (e) {
@@ -108,47 +109,61 @@ export class MusicFlow {
     }
   }
 
-  /** Result tap → detail card. Target format: "<sessionId>:<idx>". */
-  async select(chatId: number, messageId: number, target: string, locale = "en"): Promise<void> {
+  /**
+   * Option tap → options vanish → resolve → file with metadata + attachments.
+   * Target format: "<sessionId>:<idx>". Serves o1 taps and in-flight ms/md cards.
+   */
+  async select(chatId: number, messageId: number, userId: number, target: string, locale = "en"): Promise<void> {
     const [sid, idxRaw] = target.split(":");
-    const item = this.sessions.get(sid)?.items[Number(idxRaw)];
-    if (!item) {
-      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("music.session.expired", {}, locale) }, "interactive");
-      return;
-    }
-    const card = renderMusicDetail(sid, Number(idxRaw), item, locale, this.share.music(item.title));
-    await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup }, "interactive");
-  }
-
-  /** Download tap → resolve → DeliveryService → receipt. Target: "<sid>:<idx>". */
-  async download(chatId: number, messageId: number, userId: number, target: string, locale = "en"): Promise<void> {
-    const [sid, idxRaw] = target.split(":");
-    const item = this.sessions.get(sid)?.items[Number(idxRaw)];
+    const idx = Number(idxRaw);
+    const item = this.sessions.get(sid)?.items[idx];
     if (!item) {
       await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("music.session.expired", {}, locale) }, "interactive");
       return;
     }
     const title = item.title ?? "audio";
+    if (!item.pageUrl) {
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: messageId, text: renderProgress(title, "failed", t("music.download.noSource", {}, locale), locale), parse_mode: "Markdown" },
+        "interactive",
+      );
+      return;
+    }
+
+    // Options vanish first — the file is the reply.
+    await this.sender.enqueue("deleteMessage", { chat_id: chatId, message_id: messageId }, "interactive").catch(() => {});
     const verbose = this.prefs.get(userId).verbose;
+    let statusId = 0;
+    if (verbose) {
+      statusId = await msgId(
+        this.sender.enqueue(
+          "sendMessage",
+          { chat_id: chatId, text: renderProgress(title, "preparing", "", locale), parse_mode: "Markdown", reply_markup: renderStatusCancel(sid, locale) },
+          "interactive",
+        ),
+      );
+    }
     const stage = (s: OpStage, detail = "") =>
-      this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: renderProgress(title, s, detail, locale), parse_mode: "Markdown" }, "interactive");
-    const fail = (detail: string) => stage("failed", detail);
-    const cancelled = () => this.cancels.isCancelled(chatId, messageId);
+      verbose
+        ? this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: statusId, text: renderProgress(title, s, detail, locale), parse_mode: "Markdown" }, "interactive")
+        : Promise.resolve();
+    const fail = async (detail: string) => {
+      if (verbose) await stage("failed", detail);
+      else
+        await this.sender.enqueue("sendMessage", { chat_id: chatId, text: renderProgress(title, "failed", detail, locale), parse_mode: "Markdown" }, "interactive");
+    };
+    const cancelled = () => (statusId ? this.cancels.isCancelled(chatId, statusId) : false);
     const stop = async () => {
-      this.cancels.clear(chatId, messageId);
-      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("common.cancelled", {}, locale) }, "interactive");
+      if (statusId) this.cancels.clear(chatId, statusId);
+      await stage("failed", t("common.cancelled", {}, locale));
     };
 
     try {
-      if (!item.pageUrl) {
-        await fail(t("music.download.noSource", {}, locale));
-        return;
-      }
       if (cancelled()) {
         await stop();
         return;
       }
-      if (verbose) await stage("preparing");
       this.presence.action(chatId, "document");
       const { manifest } = await this.manager.resolve(item.pageUrl);
       const media = pickAudio(manifest);
@@ -162,6 +177,7 @@ export class MusicFlow {
       }
       if (verbose) await stage("downloading");
       this.presence.action(chatId, "document");
+      const att = renderMusicAttachment(sid, idx, item, locale, this.share.music(item.title));
       const out = await this.delivery.deliver(chatId, {
         key: `${manifest.dedupeKey}:audio`,
         kind: "audio",
@@ -169,6 +185,8 @@ export class MusicFlow {
         title,
         performer: item.author ?? undefined,
         duration: item.duration ?? undefined,
+        caption: att.caption,
+        replyMarkup: att.reply_markup,
         signal: cancelled,
       });
       if (out.status === "cancelled") {
@@ -198,7 +216,7 @@ export class MusicFlow {
     return true;
   }
 
-  /** ❤ Save → Queue playlist + favorites. Returns false when the session died. */
+  /** ➕ Playlist → Queue playlist + favorites. Returns false when the session died. */
   save(userId: number, target: string): boolean {
     const [sid, idxRaw] = target.split(":");
     const item: SearchItem | undefined = this.sessions.get(sid)?.items[Number(idxRaw)];
@@ -209,9 +227,14 @@ export class MusicFlow {
     return true;
   }
 
+  /** ✕ really stops the work, then removes the card it sat on. */
   async cancel(chatId: number, messageId: number, locale = "en"): Promise<void> {
     this.cancels.cancel(chatId, messageId);
-    await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("common.cancelled", {}, locale) }, "interactive");
+    try {
+      await this.sender.enqueue("deleteMessage", { chat_id: chatId, message_id: messageId }, "interactive");
+    } catch {
+      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("common.cancelled", {}, locale) }, "interactive");
+    }
   }
 }
 

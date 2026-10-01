@@ -13,6 +13,7 @@ import { Sender } from "./telegram/sender.js";
 import { createApiCall, setupBot } from "./bot/setup.js";
 import { DeliveryService } from "./bot/delivery.js";
 import { MusicFlow } from "./bot/music.js";
+import { DmRouter } from "./bot/dm.js";
 import { UrlFlow } from "./bot/urls.js";
 import { InlineFlow } from "./bot/inline.js";
 import { StreamFlow } from "./bot/stream.js";
@@ -24,7 +25,7 @@ import { SettingsFlow } from "./bot/settings.js";
 import { OwnerFlow } from "./bot/owner.js";
 import { Library } from "./state/library.js";
 import { CancelRegistry } from "./state/cancel.js";
-import { FileIdCache, ManifestSessions, SearchSessions, UserPrefs, UsersSeen } from "./state/stores.js";
+import { FileIdCache, ManifestSessions, PendingQueries, SearchSessions, SeenChats, UserPrefs, UsersSeen } from "./state/stores.js";
 import { InMemoryBus, RedisStreamBus, type StreamBus } from "./stream/bus.js";
 import { StreamQueues } from "./stream/queue.js";
 import { createHealthApp } from "./health.js";
@@ -91,7 +92,10 @@ async function main(): Promise<void> {
       maxUploadBytes: maxUploadBytesFor(cfg.botApiRoot),
       fetcher: (url, jobDir, hint) => adapter.fetchMediaUrl(url, jobDir, hint),
     });
-    const music = new MusicFlow({ manager, sender, sessions: new SearchSessions(), delivery, presence, share, cancels, prefs, library, log });
+    const sessions = new SearchSessions();
+    const music = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log });
+    const seenChats = new SeenChats();
+    const dm = new DmRouter(music, prefs, new PendingQueries(), sessions, seenChats, sender, log);
     const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log, presence, share, cancels);
     const forcejoin = new ForceJoin(sender, log);
     const bans = new BanList();
@@ -109,7 +113,7 @@ async function main(): Promise<void> {
     const settings = new SettingsFlow(sender, prefs);
     const libraryFlow = new LibraryFlow(sender, library, log);
     const owner = new OwnerFlow(sender, manager, forcejoin, bans, seen, log);
-    const bot = setupBot(cfg, sender, log, { music, urls, inline, stream, libraryFlow, forcejoin, bans, origins, presence, share, settings, owner, prefs, seen });
+    const bot = setupBot(cfg, sender, log, { music, dm, urls, inline, stream, libraryFlow, forcejoin, bans, origins, presence, share, settings, owner, prefs, seen, seenChats });
 
     // Identity (powers share links) + command menu. Best-effort: the bot works
     // without either, just with fewer shortcuts.

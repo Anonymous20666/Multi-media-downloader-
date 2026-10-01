@@ -5,7 +5,9 @@
  *
  * V1 routes: music search, paste-a-link galleries, library, settings, owner.
  * V1.5 alpha: group-call DJ (/play /skip /stop /pause /resume /queue) in flagged groups.
- * Provider-costing actions pass the gate (bans + force-join); local reads don't.
+ * M1-s1: DM router (ask → disambiguation → unified option list), DM-mode
+ * setting, stream-it bridge. Provider-costing actions pass the gate (bans +
+ * force-join); local reads don't.
  * Feel layer: inline mode everywhere, deep-link /start payloads, 👀 on receipt,
  * quoted replies, alert-toasts for real errors (not silent toasts).
  */
@@ -17,6 +19,7 @@ import { FloodWait, RetryableUpstream, Sender, type ApiCall } from "../telegram/
 import { encodeParams } from "../telegram/uploads.js";
 import { renderHubFallback, renderHubRich, unpackCb } from "../ui/components.js";
 import type { MusicFlow } from "./music.js";
+import type { DmRouter } from "./dm.js";
 import { isHttpUrl, type UrlFlow } from "./urls.js";
 import type { InlineFlow } from "./inline.js";
 import type { StreamFlow } from "./stream.js";
@@ -26,7 +29,7 @@ import type { Presence } from "./presence.js";
 import { ShareLinks, type ShareKind } from "./share.js";
 import type { SettingsFlow } from "./settings.js";
 import { isOwner, type OwnerFlow } from "./owner.js";
-import { UserPrefs, UsersSeen } from "../state/stores.js";
+import { UserPrefs, UsersSeen, type SeenChats } from "../state/stores.js";
 
 export function createApiCall(cfg: Config): ApiCall {
   const root = (cfg.botApiRoot ?? "https://api.telegram.org").replace(/\/$/, "");
@@ -55,6 +58,7 @@ export function createApiCall(cfg: Config): ApiCall {
 
 export interface BotFlows {
   music: MusicFlow;
+  dm: DmRouter;
   urls: UrlFlow;
   inline: InlineFlow;
   stream: StreamFlow;
@@ -68,6 +72,7 @@ export interface BotFlows {
   owner: OwnerFlow;
   prefs: UserPrefs;
   seen: UsersSeen;
+  seenChats: SeenChats;
 }
 
 export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlows): Bot {
@@ -103,6 +108,11 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
   }
 
   const argText = (text: string, cmd: string): string => text.replace(new RegExp(`^/${cmd}(@\\w+)?\\s*`), "");
+
+  /** Seen-group registry powers stream-it cards + owner console. Groups only. */
+  const recordGroup = (chatId: number, type: string | undefined, title: string | undefined): void => {
+    if (type === "group" || type === "supergroup") flows.seenChats.record(chatId, title ?? String(chatId));
+  };
 
   async function showHub(chatId: number): Promise<void> {
     try {
@@ -283,36 +293,42 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
   bot.command("play", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
     await flows.stream.play(ctx.chatId, ctx.from.id, argText(ctx.message?.text ?? "", "play"), ctx.chat?.type ?? "private");
   });
 
   bot.command("skip", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
     await flows.stream.skip(ctx.chatId, ctx.from.id);
   });
 
   bot.command("stop", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
     await flows.stream.stop(ctx.chatId, ctx.from.id);
   });
 
   bot.command("pause", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
     await flows.stream.pause(ctx.chatId, ctx.from.id);
   });
 
   bot.command("resume", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
     await flows.stream.resume(ctx.chatId, ctx.from.id);
   });
 
   bot.command("queue", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
+    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
     await flows.stream.viewQueue(ctx.chatId);
   });
 
@@ -347,12 +363,22 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     const messageId = ctx.callbackQuery.message?.message_id;
     try {
       switch (parsed.action) {
-        case "ms":
-          if (messageId) await flows.music.select(chatId, messageId, parsed.target);
+        case "ms": // in-flight V1 result cards → same one-tap download
+        case "md": // in-flight V1 detail cards → same one-tap download
+        case "o1":
+          if (messageId) await flows.music.select(chatId, messageId, userId, parsed.target);
           break;
-        case "md":
-          if (messageId) await flows.music.download(chatId, messageId, userId, parsed.target);
+        case "d0":
+          if (messageId) await flows.dm.pickMode(chatId, messageId, userId, parsed.target);
           break;
+        case "ds":
+          await flows.dm.streamIt(chatId, parsed.target);
+          break;
+        case "dp": {
+          const ok = flows.music.save(userId, parsed.target);
+          await toast(ok ? t("music.att.added") : t("music.session.expired"), !ok);
+          break;
+        }
         case "mx":
           if (messageId) await flows.music.cancel(chatId, messageId);
           break;
@@ -419,6 +445,12 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "sq":
           if (messageId) {
             flows.settings.cycleQuality(userId);
+            await flows.settings.editMenu(chatId, messageId, userId);
+          }
+          break;
+        case "sm":
+          if (messageId) {
+            flows.settings.cycleDmMode(userId);
             await flows.settings.editMenu(chatId, messageId, userId);
           }
           break;
@@ -524,7 +556,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
       return;
     }
     if (!(await gate(ctx.chatId, ctx.from.id, "music", text))) return;
-    await flows.music.search(ctx.chatId, ctx.from.id, text, "en", ctx.message.message_id);
+    await flows.dm.routeText(ctx.chatId, ctx.from.id, text, ctx.message.message_id);
   });
 
   bot.catch((err) => {

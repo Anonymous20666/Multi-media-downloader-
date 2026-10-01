@@ -58,10 +58,29 @@ export class ManifestSessions {
   }
 }
 
+/** Pending DM queries awaiting disambiguation (query text never fits callback_data). TTL 10 min. */
+export class PendingQueries {
+  private cache = new TtlCache<{ query: string; userId: number }>(2000, 10 * 60_000);
+  private seq = 1;
+
+  create(query: string, userId: number): string {
+    const id = `q${(this.seq++).toString(36)}${Date.now().toString(36).slice(-4)}`;
+    this.cache.set(id, { query, userId });
+    return id;
+  }
+
+  get(id: string): { query: string; userId: number } | undefined {
+    return this.cache.get(id);
+  }
+}
+
+export type DmMode = "ask" | "music" | "video" | "movie";
+
 export interface UserPref {
   verbose: boolean; // progress-stage edits on/off (real, enforced in flows)
   quality: string; // STORED ONLY in slice 2 — enforced when variant-aware delivery lands
   language: string; // "en" only until locales ship
+  dmMode: DmMode; // DM free-text routing: ask every time or go straight to a mode
 }
 
 /** Per-user preferences. PG-backed in V1.5+; memory tier proves the semantics. */
@@ -70,7 +89,7 @@ export class UserPrefs {
   get(userId: number): UserPref {
     let p = this.map.get(userId);
     if (!p) {
-      p = { verbose: true, quality: "best", language: "en" };
+      p = { verbose: true, quality: "best", language: "en", dmMode: "ask" };
       this.map.set(userId, p);
     }
     return p;
@@ -90,5 +109,19 @@ export class UsersSeen {
   }
   get count(): number {
     return this.set.size;
+  }
+}
+
+/** Seen-group registry (id → title): powers stream-it cards + owner console. */
+export class SeenChats {
+  private map = new Map<number, string>();
+  record(chatId: number, title: string): void {
+    this.map.set(chatId, title.slice(0, 120) || String(chatId));
+  }
+  list(): Array<{ id: number; title: string }> {
+    return [...this.map.entries()].map(([id, title]) => ({ id, title }));
+  }
+  get count(): number {
+    return this.map.size;
   }
 }

@@ -1,12 +1,15 @@
 import { Sender } from "../telegram/sender.js";
-import { UserPrefs } from "../state/stores.js";
+import { UserPrefs, type DmMode } from "../state/stores.js";
 import { t } from "../i18n/index.js";
 import { packCb, type FallbackMessage } from "../ui/components.js";
 
 export interface PrefsView {
   verbose: boolean;
   quality: string;
+  dmMode: DmMode;
 }
+
+const MODE_CYCLE: DmMode[] = ["ask", "music", "video", "movie"];
 
 export function renderSettings(p: PrefsView, locale = "en"): FallbackMessage {
   const text = [
@@ -14,6 +17,7 @@ export function renderSettings(p: PrefsView, locale = "en"): FallbackMessage {
     "",
     `🔔 ${t("set.verbose", {}, locale)}: ${p.verbose ? t("set.on", {}, locale) : t("set.off", {}, locale)}`,
     `🎞 ${t("set.quality", {}, locale)}: ${p.quality}`,
+    `💬 ${t("set.dmmode", {}, locale)}: ${t(`set.mode.${p.dmMode}`, {}, locale)}`,
     `🌐 ${t("set.language", {}, locale)}: English`,
     "",
     t("set.quality_note", {}, locale),
@@ -24,6 +28,7 @@ export function renderSettings(p: PrefsView, locale = "en"): FallbackMessage {
       inline_keyboard: [
         [{ text: `🔔 ${t("set.verbose", {}, locale)}: ${p.verbose ? t("set.on", {}, locale) : t("set.off", {}, locale)}`, callback_data: packCb("sv", "v", 1) }],
         [{ text: `🎞 ${p.quality}`, callback_data: packCb("sq", "q", 1) }],
+        [{ text: `💬 ${t(`set.mode.${p.dmMode}`, {}, locale)}`, callback_data: packCb("sm", "m", 1) }],
         [{ text: "🌐 English", callback_data: packCb("sl", "l", 1) }],
       ],
     },
@@ -61,6 +66,13 @@ export class SettingsFlow {
     const cur = this.prefs.get(userId).quality;
     const next = QUALITY_CYCLE[(QUALITY_CYCLE.indexOf(cur as (typeof QUALITY_CYCLE)[number]) + 1 + QUALITY_CYCLE.length) % QUALITY_CYCLE.length] ?? "best";
     this.prefs.set(userId, { quality: next });
+    return next;
+  }
+
+  cycleDmMode(userId: number): DmMode {
+    const cur = this.prefs.get(userId).dmMode;
+    const next = MODE_CYCLE[(MODE_CYCLE.indexOf(cur) + 1) % MODE_CYCLE.length] ?? "ask";
+    this.prefs.set(userId, { dmMode: next });
     return next;
   }
 }

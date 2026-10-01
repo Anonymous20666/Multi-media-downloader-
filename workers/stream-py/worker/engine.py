@@ -145,6 +145,8 @@ class PyTgCallsEngine(CallEngine):
         self._call.start()
 
     def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
+        from pytgcalls.types import AudioQuality, VideoQuality, MediaStream
+
         if is_video:
             stream = MediaStream(
                 url,

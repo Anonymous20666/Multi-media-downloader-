@@ -12,11 +12,11 @@ import { ShareLinks } from "./share.js";
 import { MusicFlow } from "./music.js";
 
 const ITEMS: SearchItem[] = [
-  { id: "a1", title: "Fall Back", author: "Lithe", pageUrl: "https://music.example/t/1", duration: 187 },
+  { id: "a1", title: "Fall Back", author: "Lithe", pageUrl: "https://music.example/t/1", duration: 187, thumbnail: "https://img.example/cover.jpg" },
   { id: "a2", title: "No Source", author: "Ghost", pageUrl: null },
 ];
 
-function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (chatId: number, o: Record<string, unknown>) => unknown; username?: string } = {}) {
+function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (chatId: number, o: Record<string, unknown>) => unknown; username?: string; noTag?: boolean } = {}) {
   const calls: Array<{ method: string; text: string; kb: string; params: Record<string, unknown> }> = [];
   let mid = 100;
   const sender = {
@@ -46,8 +46,13 @@ function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (
   const share = new ShareLinks();
   if (opts.username) share.setUsername(opts.username);
   const cancels = new CancelRegistry();
-  const flow = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log: createLogger("error") });
-  return { calls, delivered, flow, library, prefs, sessions, cancels };
+  const tagged: Array<{ filePath: string; meta: unknown; jobDir: string }> = [];
+  const tagMusic = async (filePath: string, meta: unknown, jobDir: string) => {
+    tagged.push({ filePath, meta, jobDir });
+    return { path: filePath };
+  };
+  const flow = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log: createLogger("error"), ...(opts.noTag ? {} : { tagMusic }) });
+  return { calls, delivered, flow, library, prefs, sessions, cancels, tagged };
 }
 
 function sidOf(calls: Array<{ kb: string }>): string {
@@ -156,4 +161,21 @@ test("music cancel: marks the registry and removes the card", async () => {
   await h.flow.cancel(7, 99);
   assert.equal(h.cancels.isCancelled(7, 99), true);
   assert.equal(h.calls[h.calls.length - 1].method, "deleteMessage");
+});
+
+test("music select passes a tagging postFetch wired to title/artist/artwork", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  await h.flow.select(7, 50, 9001, `${sidOf(h.calls)}:0`);
+  const postFetch = h.delivered[0]["postFetch"] as (p: string) => Promise<string>;
+  assert.equal(typeof postFetch, "function");
+  await postFetch("/tmp/job-1/001 - x.mp3");
+  assert.equal(h.tagged.length, 1);
+  assert.deepEqual(h.tagged[0].meta, { title: "Fall Back", artist: "Lithe", coverUrl: "https://img.example/cover.jpg" });
+  assert.equal(h.tagged[0].jobDir, "/tmp/job-1");
+
+  const n = harness({ noTag: true });
+  await n.flow.search(7, 9001, "lithe");
+  await n.flow.select(7, 50, 9001, `${sidOf(n.calls)}:0`);
+  assert.equal(n.delivered[0]["postFetch"], undefined);
 });

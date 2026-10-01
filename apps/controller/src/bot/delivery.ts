@@ -8,7 +8,7 @@
  * audio/document group with their own kind only — enforced by the caller).
  * A failed album falls back to individual sends so nothing silently vanishes.
  */
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { MediaItem } from "@pappy/media-manifest";
@@ -34,6 +34,12 @@ export interface DeliverOpts {
   replyMarkup?: unknown;
   /** Long-flow cancellation (✕ button). Checked before each network send. */
   signal?: () => boolean;
+  /**
+   * Enhancement hook (e.g. ID3 tagging): receives the fetched file path,
+   * returns the path to upload (may be the same file, modified in place).
+   * Hook failure never blocks delivery — the unprocessed file goes out.
+   */
+  postFetch?: (filePath: string) => Promise<string>;
 }
 
 export type DeliverOutcome = { status: "sent"; cached: boolean; fileId?: string } | { status: "too-large"; bytes: number } | { status: "cancelled" };
@@ -143,10 +149,20 @@ export class DeliveryService {
       const fetched = await this.fetcher(opts.mediaUrl, jobDir, opts.title ?? "media");
       if (fetched.bytes > this.maxUploadBytes) return { status: "too-large", bytes: fetched.bytes };
       if (opts.signal?.()) return { status: "cancelled" };
-      const buf = Buffer.from(await readFile(fetched.path));
+      let filePath = fetched.path;
+      if (opts.postFetch) {
+        try {
+          filePath = await opts.postFetch(fetched.path);
+        } catch (e) {
+          this.log.warn("postFetch hook failed — delivering unprocessed", { key: opts.key, error: (e as Error).message });
+        }
+      }
+      const finalBytes = filePath === fetched.path ? fetched.bytes : (await stat(filePath)).size;
+      if (finalBytes > this.maxUploadBytes) return { status: "too-large", bytes: finalBytes };
+      const buf = Buffer.from(await readFile(filePath));
       const sent = await this.sender.enqueue(
         method,
-        { chat_id: chatId, [field]: uploadFile(buf, opts.fileName ?? path.basename(fetched.path), fetched.mimeType ?? DEFAULT_MIME[opts.kind]), ...base },
+        { chat_id: chatId, [field]: uploadFile(buf, opts.fileName ?? path.basename(filePath), fetched.mimeType ?? DEFAULT_MIME[opts.kind]), ...base },
         "interactive",
       );
       const fileId = extractFileId(sent, opts.kind);

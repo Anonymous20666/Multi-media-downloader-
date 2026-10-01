@@ -74,3 +74,34 @@ test("extractFileId picks the largest photo size, tolerates junk", async () => {
   assert.equal(extractFileId(null, "document"), undefined);
   await mkdtemp(path.join(tmpdir(), "noop-")); // keep tmpdir import honest in editors
 });
+
+test("delivery applies postFetch before upload; hook failure delivers unprocessed", async () => {
+  const h = harness();
+  let hookPath = "";
+  const o = await h.delivery.deliver(7, {
+    key: "tag",
+    kind: "audio",
+    mediaUrl: "https://cdn/x.mp3",
+    postFetch: async (p) => {
+      hookPath = p;
+      const np = `${p}.tagged`;
+      await writeFile(np, Buffer.from("TAGGED"));
+      return np;
+    },
+  });
+  assert.equal(o.status, "sent");
+  assert.match(hookPath, /\.mp3$/);
+  const up = h.sends[0].params["audio"] as { __upload: { buffer: Buffer } };
+  assert.equal(up.__upload.buffer.toString(), "TAGGED");
+
+  const h2 = harness();
+  const o2 = await h2.delivery.deliver(7, {
+    key: "tag2",
+    kind: "audio",
+    mediaUrl: "https://cdn/x.mp3",
+    postFetch: async () => { throw new Error("tagger down"); },
+  });
+  assert.equal(o2.status, "sent");
+  const up2 = h2.sends[0].params["audio"] as { __upload: { buffer: Buffer } };
+  assert.equal(up2.__upload.buffer.byteLength, 64); // original bytes, hook skipped
+});

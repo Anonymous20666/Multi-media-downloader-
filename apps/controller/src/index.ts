@@ -93,7 +93,7 @@ async function main(): Promise<void> {
       fetcher: (url, jobDir, hint) => adapter.fetchMediaUrl(url, jobDir, hint),
     });
     const sessions = new SearchSessions();
-    const music = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log });
+    const music = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log, tagMusic: (fp, meta, dir) => adapter.tagMusicFile(fp, meta, dir) });
     const seenChats = new SeenChats();
     const dm = new DmRouter(music, prefs, new PendingQueries(), sessions, seenChats, sender, log);
     const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log, presence, share, cancels);

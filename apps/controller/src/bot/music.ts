@@ -7,6 +7,7 @@
  * message, share links, and a ✕ that really stops the work.
  * Decoupled from grammY ctx (plain IDs) so the whole flow is unit-testable.
  */
+import path from "node:path";
 import type { MediaManifest, ProviderManager, SearchItem } from "@pappy/media-manifest";
 import type { Logger } from "../logger.js";
 import { t } from "../i18n/index.js";
@@ -21,6 +22,15 @@ import { Library } from "../state/library.js";
 import { CancelRegistry } from "../state/cancel.js";
 import { SearchSessions, UserPrefs } from "../state/stores.js";
 
+export interface TagMusicMeta {
+  title: string;
+  artist?: string | null;
+  coverUrl?: string | null;
+}
+
+/** Guarded ID3 + artwork tagging (jobDir scopes the cover-art sidecar). */
+export type TagMusic = (filePath: string, meta: TagMusicMeta, jobDir: string) => Promise<{ path: string }>;
+
 export interface MusicDeps {
   manager: ProviderManager;
   sender: Sender;
@@ -32,6 +42,7 @@ export interface MusicDeps {
   prefs: UserPrefs;
   library: Library;
   log: Logger;
+  tagMusic?: TagMusic;
 }
 
 async function msgId(p: Promise<unknown>): Promise<number> {
@@ -51,6 +62,7 @@ export class MusicFlow {
   private prefs: UserPrefs;
   private library: Library;
   private log: Logger;
+  private tagMusic?: TagMusic;
 
   constructor(deps: MusicDeps) {
     this.manager = deps.manager;
@@ -63,6 +75,7 @@ export class MusicFlow {
     this.prefs = deps.prefs;
     this.library = deps.library;
     this.log = deps.log.child({ flow: "music" });
+    this.tagMusic = deps.tagMusic;
   }
 
   /** /music <query> or DM free-text. replyTo quotes the user's message. */
@@ -178,6 +191,7 @@ export class MusicFlow {
       if (verbose) await stage("downloading");
       this.presence.action(chatId, "document");
       const att = renderMusicAttachment(sid, idx, item, locale, this.share.music(item.title));
+      const tagMusic = this.tagMusic;
       const out = await this.delivery.deliver(chatId, {
         key: `${manifest.dedupeKey}:audio`,
         kind: "audio",
@@ -188,6 +202,7 @@ export class MusicFlow {
         caption: att.caption,
         replyMarkup: att.reply_markup,
         signal: cancelled,
+        postFetch: tagMusic ? (p) => tagMusic(p, { title, artist: item.author, coverUrl: item.thumbnail }, path.dirname(p)).then((r) => r.path) : undefined,
       });
       if (out.status === "cancelled") {
         await stop();

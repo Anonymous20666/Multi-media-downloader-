@@ -38,17 +38,31 @@ function redactError(e: unknown): Error {
 
 export interface UmediaAdapterOpts extends SafeFetchOpts {
   downloadDir?: string;
+  /** Injectable engine (tests). Production always uses the real UMedia. */
+  engine?: UMedia;
+}
+
+export interface TagMusicMeta {
+  title: string;
+  artist?: string | null;
+  coverUrl?: string | null;
+}
+
+export interface TagMusicResult {
+  path: string;
+  tagged: boolean;
 }
 
 export class UmediaAdapter implements MediaProvider {
   readonly key = "umedia";
-  private engine = new UMedia();
+  private engine: UMedia;
   private downloadDir: string;
   private fetchOpts: SafeFetchOpts;
 
   constructor(opts: UmediaAdapterOpts = {}) {
     this.downloadDir = opts.downloadDir ?? "./pappy-media-downloads";
-    const { downloadDir: _d, ...rest } = opts;
+    this.engine = opts.engine ?? new UMedia();
+    const { downloadDir: _d, engine: _e, ...rest } = opts;
     this.fetchOpts = { timeoutMs: 60_000, maxBytes: 2_000 * 1024 * 1024, maxRedirects: 5, ...rest };
   }
 
@@ -195,6 +209,43 @@ export class UmediaAdapter implements MediaProvider {
     const dest = path.join(jobDir, name);
     await writeFile(dest, res.bytes);
     return { path: dest, bytes: res.bytes.byteLength, finalUrl: res.url, mimeType: mime };
+  }
+
+  /**
+   * ID3 + artwork tagging (0.8.0 tagAudio) as a guarded post-fetch step.
+   * Bytes still move through OUR safeFetch; only the local tagging runs in-engine.
+   * Cover art is fetched via OUR guarded fetch (5 MB cap, image-only) and passed
+   * as a LOCAL path, so the engine performs zero network I/O here. Never throws:
+   * any failure returns the original file untagged (tagged: false).
+   */
+  async tagMusicFile(filePath: string, meta: TagMusicMeta, jobDir: string): Promise<TagMusicResult> {
+    let cover: string | null = null;
+    if (meta.coverUrl) {
+      try {
+        cover = await this.fetchCover(meta.coverUrl, jobDir);
+      } catch {
+        cover = null;
+      }
+    }
+    try {
+      const r = await this.engine.tagAudio({ filePath, metadata: { title: meta.title, artist: meta.artist ?? undefined }, cover });
+      return { path: r.path, tagged: r.tagged };
+    } catch {
+      return { path: filePath, tagged: false };
+    }
+  }
+
+  private async fetchCover(url: string, jobDir: string): Promise<string> {
+    const safe = await assertSafeUrl(url, this.fetchOpts);
+    const res = await safeFetch(safe.href, { ...this.fetchOpts, maxBytes: 5 * 1024 * 1024, timeoutMs: 15_000 });
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status} fetching cover`);
+    const mime = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : mime === "image/gif" ? "gif" : mime === "image/jpeg" || mime === "image/jpg" ? "jpg" : null;
+    if (!ext) throw new Error(`cover is not an image (${mime || "unknown"})`);
+    await mkdir(jobDir, { recursive: true });
+    const dest = path.join(jobDir, `cover.${ext}`);
+    await writeFile(dest, res.bytes);
+    return dest;
   }
 }
 

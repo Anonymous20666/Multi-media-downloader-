@@ -119,6 +119,7 @@ class PyTgCallsEngine(CallEngine):
 
     def start(self) -> None:
         from pyrogram import Client  # noqa: PLC0415 — heavy deps stay lazy
+        from pytgcalls import PyTgCalls
         from pytgcalls.types import StreamEnded, ChatUpdate
 
         self._StreamEnded = StreamEnded

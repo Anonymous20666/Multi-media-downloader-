@@ -82,7 +82,7 @@ export class UmediaAdapter implements MediaProvider {
         data: Record<string, unknown>;
         engine?: { attempts?: ProviderAttempt[] };
       };
-      // 0.7.0 Tier D/E honest outcomes: DRM / auth-required. Map to typed errors
+      // Tier D/E honest outcomes: DRM / auth-required. Map to typed errors
       // (their data.media is empty by design — never force it through the manifest).
       if (r.success === false) {
         const code = r.error?.code === "AUTH_REQUIRED" ? Codes.AUTH_REQUIRED : Codes.ACCESS_RESTRICTED;
@@ -133,7 +133,7 @@ export class UmediaAdapter implements MediaProvider {
   }
 
   /**
-   * Music search (0.7.0 music module: iTunes 30s + SoundCloud full-track + Archive + YouTube).
+   * Music search (0.8.0 music module: iTunes 30s + SoundCloud full-track + Archive + YouTube).
    * Query text has no SSRF surface; results are normalized + redacted like everything else.
    * NOTE: 18+ stays OFF — the adapter exposes no adult flag until our policy ships (X15).
    */

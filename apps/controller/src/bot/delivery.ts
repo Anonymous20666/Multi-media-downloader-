@@ -68,6 +68,7 @@ export interface DeliveryDeps {
   maxUploadBytes: number;
   fetcher: Fetcher;
   jobRoot?: string;
+  compressor?: (input: string, output: string, targetMb: number) => Promise<{ path: string; size: number }>;
 }
 
 const METHOD: Record<DeliverKind, string> = { image: "sendPhoto", video: "sendVideo", audio: "sendAudio", document: "sendDocument" };
@@ -100,6 +101,7 @@ export class DeliveryService {
   private maxUploadBytes: number;
   private fetcher: Fetcher;
   private jobRoot: string;
+  private compressor?: (input: string, output: string, targetMb: number) => Promise<{ path: string; size: number }>;
 
   constructor(deps: DeliveryDeps) {
     this.sender = deps.sender;
@@ -108,6 +110,7 @@ export class DeliveryService {
     this.maxUploadBytes = deps.maxUploadBytes;
     this.fetcher = deps.fetcher;
     this.jobRoot = deps.jobRoot ?? path.join(tmpdir(), "pappy-jobs");
+    this.compressor = deps.compressor;
   }
 
   private baseParams(kind: DeliverKind, o: { title?: string; performer?: string; duration?: number; caption?: string; replyMarkup?: unknown }): Record<string, unknown> {
@@ -147,7 +150,25 @@ export class DeliveryService {
     const jobDir = await mkdtemp(path.join(this.jobRoot, "job-"));
     try {
       const fetched = await this.fetcher(opts.mediaUrl, jobDir, opts.title ?? "media");
-      if (fetched.bytes > this.maxUploadBytes) return { status: "too-large", bytes: fetched.bytes };
+      if (fetched.bytes > this.maxUploadBytes) {
+        if (opts.kind === "video" && this.compressor) {
+          try {
+            const targetMb = Math.max(5, Math.floor(this.maxUploadBytes / (1024 * 1024)) - 2);
+            const comp = await this.compressor(fetched.path, path.join(jobDir, "compressed.mp4"), targetMb);
+            if (comp.size <= this.maxUploadBytes) {
+              fetched.path = comp.path;
+              fetched.bytes = comp.size;
+            } else {
+              return { status: "too-large", bytes: fetched.bytes };
+            }
+          } catch (e) {
+            this.log.warn("video compression failed — reporting too-large", { error: (e as Error).message });
+            return { status: "too-large", bytes: fetched.bytes };
+          }
+        } else {
+          return { status: "too-large", bytes: fetched.bytes };
+        }
+      }
       if (opts.signal?.()) return { status: "cancelled" };
       let filePath = fetched.path;
       if (opts.postFetch) {

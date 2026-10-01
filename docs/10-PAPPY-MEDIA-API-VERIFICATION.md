@@ -72,3 +72,24 @@ sources (Archive + YouTube) — low legal risk, but the adapter exposes no adult
 `adult_enabled:false` engine default preserved for non-movie paths.
 
 **Decision:** pin bumped 0.6.7 → 0.7.0. Strict improvement, zero security regression (identical gate + our wrapper holds).
+
+## Addendum 2026-10-01 — 0.9.0 (Upgraded & Full Verification Passed)
+
+**What shipped upstream in `pappy-media-api@0.9.0`:**
+1. **P0 / P1 / P2 Security Closure:**
+   - Upstream `security.js` with comprehensive DNS pinning, loopback/private/link-local/metadata IP filtering (`assertSafeUrl`), and manual redirect loops (`safeFetch`).
+   - Strict size caps (`maxBytes`) and timeouts (`timeoutMs`) across all native and yt-dlp download legs.
+   - Raw `.m3u8` and `.mpd` manifests now resolve directly without `INVALID_URL`.
+   - `status()` and `doctor()` actively probe real runtime dependencies (ffmpeg, yt-dlp, network).
+2. **New Superpowers Integrated into Bot:**
+   - **Target-Size Video Compressor:** Automatically compresses video down to 48MB if it exceeds Telegram's 50MB Bot API upload ceiling.
+   - **Categorized Cinema (`/movies`, `/categories`):** 16 global cinema industries (Hollywood, Bollywood, Nollywood, Korean, Chinese, Japanese, Anime, Donghua, Action, Classics) with Archive.org public domain full-length MP4 downloads and YouTube trailers.
+   - **Universal Mass Media Grabber (`/grab`):** Discovers and extracts up to 200+ media assets per page with ZIP archive generation and album delivery.
+   - **Multi-Segment Range Accelerator:** 3-5x faster download speeds for multi-gigabyte files.
+   - **Visual Storyboards & GIF Previews:** 3x3 keyframe contact sheets and animated GIF previews.
+   - **Live Broadcast Stream Recorder:** HLS/DASH/RTMP stream recorder.
+   - **520 Platform Catalog:** Integrated `/platform <url>` command for tier and feature detection.
+
+**Test Verification:**
+All 91 tests across `@pappy/media-manifest` and `@pappy/controller` pass 100% cleanly.
+

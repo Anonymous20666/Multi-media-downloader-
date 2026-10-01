@@ -143,5 +143,13 @@
   "music.att.playlist": "➕ Playlist",
   "music.att.added": "➕ Added to Queue",
   "music.meta.source": "Source",
-  "music.options.title": "Tap one to download"
+  "music.options.title": "Tap one to download",
+  "movies.results.title": "Movies matching “{q}”",
+  "movies.categories.title": "Movie Industries & Categories",
+  "movies.detail.director": "Director",
+  "movies.detail.category": "Category",
+  "movies.detail.download": "▶ Download Feature Film",
+  "movies.detail.trailer": "🎬 Watch Trailer",
+  "grab.title": "Mass Media Grabber",
+  "grab.zip": "Download All (ZIP)"
 }

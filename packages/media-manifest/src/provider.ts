@@ -44,6 +44,43 @@ export interface SearchItem {
   duration?: number | null;
   previewUrl?: string | null;
   previewKind?: string | null;
+  downloadUrl?: string | null;
+  year?: number | null;
+  category?: string | null;
+  description?: string | null;
+  source?: string | null;
+}
+
+export interface MovieCategory {
+  id: string;
+  name: string;
+  description: string;
+  adult?: boolean;
+}
+
+export interface GrabbedMediaItem {
+  index: number;
+  url: string;
+  type: "image" | "video" | "audio" | "document" | "unknown";
+  mimeType?: string | null;
+  width?: number | null;
+  height?: number | null;
+  size?: number | null;
+  title?: string | null;
+  thumbnail?: string | null;
+}
+
+export interface GrabResult {
+  url: string;
+  itemCount: number;
+  items: GrabbedMediaItem[];
+  counts: {
+    images: number;
+    videos: number;
+    audios: number;
+    documents: number;
+    other: number;
+  };
 }
 
 export interface SearchProvider extends MediaProvider {

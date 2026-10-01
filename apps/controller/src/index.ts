@@ -13,6 +13,8 @@ import { Sender } from "./telegram/sender.js";
 import { createApiCall, setupBot } from "./bot/setup.js";
 import { DeliveryService } from "./bot/delivery.js";
 import { MusicFlow } from "./bot/music.js";
+import { MovieFlow } from "./bot/movies.js";
+import { GrabFlow } from "./bot/grab.js";
 import { DmRouter } from "./bot/dm.js";
 import { UrlFlow } from "./bot/urls.js";
 import { InlineFlow } from "./bot/inline.js";
@@ -25,7 +27,7 @@ import { SettingsFlow } from "./bot/settings.js";
 import { OwnerFlow } from "./bot/owner.js";
 import { Library } from "./state/library.js";
 import { CancelRegistry } from "./state/cancel.js";
-import { FileIdCache, ManifestSessions, PendingQueries, SearchSessions, SeenChats, UserPrefs, UsersSeen } from "./state/stores.js";
+import { FileIdCache, GrabSessions, ManifestSessions, PendingQueries, SearchSessions, SeenChats, UserPrefs, UsersSeen } from "./state/stores.js";
 import { InMemoryBus, RedisStreamBus, type StreamBus } from "./stream/bus.js";
 import { StreamQueues } from "./stream/queue.js";
 import { createHealthApp } from "./health.js";
@@ -40,6 +42,9 @@ export function maxUploadBytesFor(botApiRoot: string | null): number {
 
 const BASE_COMMANDS = [
   { command: "music", description: "Search songs" },
+  { command: "movies", description: "Search movies & cinema" },
+  { command: "categories", description: "Browse movie industries & genres" },
+  { command: "grab", description: "Universal web media grabber (200+ items)" },
   { command: "dl", description: "Download from a link" },
   { command: "playlist", description: "Your playlists" },
   { command: "playlist_new", description: "Create a playlist" },
@@ -91,11 +96,15 @@ async function main(): Promise<void> {
       log,
       maxUploadBytes: maxUploadBytesFor(cfg.botApiRoot),
       fetcher: (url, jobDir, hint) => adapter.fetchMediaUrl(url, jobDir, hint),
+      compressor: (input, output, targetMb) => adapter.compressVideo(input, output, targetMb),
     });
     const sessions = new SearchSessions();
     const music = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log, tagMusic: (fp, meta, dir) => adapter.tagMusicFile(fp, meta, dir) });
+    const movies = new MovieFlow({ adapter, sender, sessions, delivery, presence, prefs, library, log });
+    const grabSessions = new GrabSessions();
+    const grab = new GrabFlow({ adapter, sender, sessions: grabSessions, delivery, presence, log });
     const seenChats = new SeenChats();
-    const dm = new DmRouter(music, prefs, new PendingQueries(), sessions, seenChats, sender, log);
+    const dm = new DmRouter(music, prefs, new PendingQueries(), sessions, seenChats, sender, log, movies);
     const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log, presence, share, cancels);
     const forcejoin = new ForceJoin(sender, log);
     const bans = new BanList();
@@ -113,7 +122,27 @@ async function main(): Promise<void> {
     const settings = new SettingsFlow(sender, prefs);
     const libraryFlow = new LibraryFlow(sender, library, log);
     const owner = new OwnerFlow(sender, manager, forcejoin, bans, seen, log);
-    const bot = setupBot(cfg, sender, log, { music, dm, urls, inline, stream, libraryFlow, forcejoin, bans, origins, presence, share, settings, owner, prefs, seen, seenChats });
+    const bot = setupBot(cfg, sender, log, {
+      music,
+      dm,
+      urls,
+      inline,
+      stream,
+      libraryFlow,
+      forcejoin,
+      bans,
+      origins,
+      presence,
+      share,
+      settings,
+      owner,
+      prefs,
+      seen,
+      seenChats,
+      movies,
+      grab,
+      adapter,
+    });
 
     // Identity (powers share links) + command menu. Best-effort: the bot works
     // without either, just with fewer shortcuts.

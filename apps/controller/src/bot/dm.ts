@@ -31,6 +31,7 @@ export function renderDisambiguation(query: string, qid: string, locale = "en"):
 
 export class DmRouter {
   private music: MusicFlow;
+  private movies?: import("./movies.js").MovieFlow;
   private prefs: UserPrefs;
   private pending: PendingQueries;
   private sessions: SearchSessions;
@@ -38,8 +39,9 @@ export class DmRouter {
   private sender: Sender;
   private log: Logger;
 
-  constructor(music: MusicFlow, prefs: UserPrefs, pending: PendingQueries, sessions: SearchSessions, seenChats: SeenChats, sender: Sender, log: Logger) {
+  constructor(music: MusicFlow, prefs: UserPrefs, pending: PendingQueries, sessions: SearchSessions, seenChats: SeenChats, sender: Sender, log: Logger, movies?: import("./movies.js").MovieFlow) {
     this.music = music;
+    this.movies = movies;
     this.prefs = prefs;
     this.pending = pending;
     this.sessions = sessions;
@@ -76,6 +78,10 @@ export class DmRouter {
   private async runMode(chatId: number, userId: number, mode: DmMode, query: string, replyTo?: number, locale = "en"): Promise<void> {
     if (mode === "music" || mode === "ask") {
       await this.music.search(chatId, userId, query, locale, replyTo);
+      return;
+    }
+    if (mode === "movie" && this.movies) {
+      await this.movies.search(chatId, userId, query, undefined, locale, replyTo);
       return;
     }
     // Honest placeholders with a working way out (M1-s2 wires the real search).

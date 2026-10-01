@@ -12,10 +12,10 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { UMedia, UMediaError, Codes } from "pappy-media-api";
+import { UMedia, UMediaError, Codes, detectPlatform, lookupPlatform } from "pappy-media-api";
 import { assertSafeUrl, safeFetch, redactUrl, type SafeFetchOpts } from "./ssrf.js";
 import { parseManifest, type MediaManifest } from "./manifest.js";
-import type { MediaProvider, ProviderAttempt, ProviderCapabilities, ResolveResult, SearchItem } from "./provider.js";
+import type { MediaProvider, ProviderAttempt, ProviderCapabilities, ResolveResult, SearchItem, MovieCategory, GrabResult } from "./provider.js";
 
 const DIRECT_MEDIA = /\.(mp4|webm|m4a|mp3|aac|wav|jpg|jpeg|png|gif|webp|mov|mkv)(\?|#|$)/i;
 
@@ -176,6 +176,122 @@ export class UmediaAdapter implements MediaProvider {
     } catch (e) {
       throw redactError(e);
     }
+  }
+
+  /**
+   * Categorized movie search (0.9.0 movies module).
+   */
+  async searchMovies(opts: { q: string; category?: string; limit?: number; source?: "all" | "archive" | "youtube"; adult?: boolean }): Promise<{ items: SearchItem[]; attempts: ProviderAttempt[] }> {
+    const query = String(opts.q ?? "").trim().slice(0, 200);
+    if (!query) throw new UMediaError(Codes.INVALID_REQUEST, "searchMovies(q) — q is required");
+    try {
+      const r = await this.engine.searchMovies({
+        q: query,
+        category: opts.category,
+        limit: opts.limit ?? 10,
+        source: opts.source ?? "all",
+        adult: opts.adult ?? false,
+      });
+      const items: SearchItem[] = (r.data.items ?? []).map((m: any) => ({
+        id: String(m.id ?? m.pageUrl ?? query),
+        title: String(m.title ?? "Unknown"),
+        author: m.author ?? m.director ?? null,
+        pageUrl: m.pageUrl ?? null,
+        thumbnail: m.thumbnail ?? m.poster ?? null,
+        duration: m.duration ?? null,
+        previewUrl: m.previewUrl ?? null,
+        previewKind: m.previewKind ?? null,
+        downloadUrl: m.downloadUrl ?? null,
+        year: m.year ?? null,
+        category: m.category ?? opts.category ?? null,
+        description: m.description ?? null,
+        source: m.source ?? null,
+      }));
+      const attempts: ProviderAttempt[] = (r.engine?.attempts ?? []).map((a: any) => ({
+        provider: `umedia/${a.provider}`,
+        status: a.status,
+        latencyMs: a.latencyMs ?? undefined,
+        error: a.error ?? undefined,
+      }));
+      return { items, attempts };
+    } catch (e) {
+      throw redactError(e);
+    }
+  }
+
+  /**
+   * Returns list of movie categories (16 global cinema categories).
+   */
+  movieCategories(opts?: { adult?: boolean }): MovieCategory[] {
+    return this.engine.movieCategories(opts);
+  }
+
+  /**
+   * Video search across YouTube & platforms.
+   */
+  async searchVideo(q: string, limit = 10): Promise<{ items: SearchItem[]; attempts: ProviderAttempt[] }> {
+    const query = String(q ?? "").trim().slice(0, 200);
+    if (!query) throw new UMediaError(Codes.INVALID_REQUEST, "searchVideo(q) — q is required");
+    try {
+      const r = await this.engine.search({ q: query, type: "video", limit });
+      const items: SearchItem[] = (r.data.items ?? []).map((m: any) => ({
+        id: String(m.id ?? m.pageUrl ?? query),
+        title: String(m.title ?? "Unknown"),
+        author: m.author ?? null,
+        pageUrl: m.pageUrl ?? null,
+        thumbnail: m.thumbnail ?? null,
+        duration: m.duration ?? null,
+        previewUrl: m.previewUrl ?? null,
+        previewKind: m.previewKind ?? null,
+        source: m.source ?? "youtube",
+      }));
+      const attempts: ProviderAttempt[] = (r.engine?.attempts ?? []).map((a: any) => ({
+        provider: `umedia/${a.provider}`,
+        status: a.status,
+        latencyMs: a.latencyMs ?? undefined,
+        error: a.error ?? undefined,
+      }));
+      return { items, attempts };
+    } catch (e) {
+      throw redactError(e);
+    }
+  }
+
+  /**
+   * Universal Mass Media Grabber (extracts up to 200+ media items from any page).
+   */
+  async grab(url: string, opts?: { limit?: number; type?: "all" | "image" | "video" | "audio" }): Promise<GrabResult> {
+    const safe = await assertSafeUrl(url, this.fetchOpts);
+    try {
+      const res = await this.engine.grab(safe.href, opts);
+      return res as unknown as GrabResult;
+    } catch (e) {
+      throw redactError(e);
+    }
+  }
+
+  /**
+   * Target-size video compressor (optimizes videos for Discord 25MB, Telegram 50MB, WhatsApp 16MB).
+   */
+  async compressVideo(inputPath: string, outputPath: string, targetSizeMb = 48): Promise<{ path: string; size: number }> {
+    return this.engine.compress({ input: inputPath, output: outputPath, targetSizeMb });
+  }
+
+  /**
+   * Generate storyboard contact sheet or animated GIF preview.
+   */
+  async createPreview(inputPath: string, outputPath: string, kind: "storyboard" | "gif" = "storyboard"): Promise<{ path: string }> {
+    if (kind === "gif") {
+      return this.engine.createPreviewGif({ input: inputPath, output: outputPath });
+    }
+    return this.engine.createStoryboard({ input: inputPath, output: outputPath });
+  }
+
+  /**
+   * Detect platform from URL.
+   */
+  detectPlatform(url: string) {
+    return detectPlatform(url);
   }
 
   /**

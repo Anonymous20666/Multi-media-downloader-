@@ -73,6 +73,9 @@ export interface BotFlows {
   prefs: UserPrefs;
   seen: UsersSeen;
   seenChats: SeenChats;
+  movies?: import("./movies.js").MovieFlow;
+  grab?: import("./grab.js").GrabFlow;
+  adapter?: import("@pappy/media-manifest").UmediaAdapter;
 }
 
 export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlows): Bot {
@@ -230,6 +233,58 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     flows.seen.record(ctx.from.id);
     if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
     await flows.settings.menu(ctx.chatId, ctx.from.id);
+  });
+
+  bot.command(["movies", "movie"], async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    const query = argText(ctx.message?.text ?? "", "movies") || argText(ctx.message?.text ?? "", "movie");
+    if (flows.movies) {
+      await flows.movies.search(ctx.chatId, ctx.from.id, query, undefined, "en", ctx.message?.message_id);
+    }
+  });
+
+  bot.command("categories", async (ctx) => {
+    if (!ctx.chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    if (await denyIfBanned(ctx.chatId, ctx.from.id)) return;
+    if (flows.movies) {
+      await flows.movies.categories(ctx.chatId, ctx.from.id, "en");
+    }
+  });
+
+  bot.command("grab", async (ctx) => {
+    if (!ctx.chatId || !ctx.from || !ctx.message) return;
+    flows.seen.record(ctx.from.id);
+    flows.presence.react(ctx.chatId, ctx.message.message_id, "👀");
+    const url = argText(ctx.message.text ?? "", "grab");
+    if (!url) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: "Usage: /grab <url>\nExtracts 50–200+ images/videos from any webpage." }, "interactive").catch(() => {});
+      return;
+    }
+    if (!(await gate(ctx.chatId, ctx.from.id, "url", url))) return;
+    if (flows.grab) {
+      await flows.grab.grab(ctx.chatId, ctx.from.id, url, "en", ctx.message.message_id);
+    }
+  });
+
+  bot.command("platform", async (ctx) => {
+    if (!ctx.chatId || !ctx.from || !ctx.message) return;
+    flows.seen.record(ctx.from.id);
+    const url = argText(ctx.message.text ?? "", "platform");
+    if (!url) {
+      await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: "Usage: /platform <url>\nChecks platform support and tier across 520 platforms." }, "interactive").catch(() => {});
+      return;
+    }
+    const detected = flows.adapter?.detectPlatform(url) as any;
+    const text = detected && typeof detected === "object"
+      ? `🏛 *${detected.name}* (ID: \`${detected.id}\`)\n` +
+        `• Tier: *${detected.tier}*\n` +
+        `• Category: *${detected.category}*\n` +
+        `• Features: ${Array.isArray(detected.features) ? detected.features.join(", ") : "Standard media"}`
+      : `🏛 Platform: *${detected || "unknown"}*`;
+    await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text, parse_mode: "Markdown" }, "interactive").catch(() => {});
   });
 
   bot.command("admin", async (ctx) => {
@@ -485,6 +540,24 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           }
           await flows.owner.users(chatId);
           break;
+        case "mo":
+          if (messageId && flows.movies) await flows.movies.select(chatId, messageId, userId, parsed.target);
+          break;
+        case "mc":
+          if (messageId && flows.movies) await flows.movies.pickCategory(chatId, messageId, userId, parsed.target);
+          break;
+        case "mdl":
+          if (messageId && flows.movies) await flows.movies.download(chatId, messageId, userId, parsed.target);
+          break;
+        case "gz":
+          if (messageId && flows.grab) await flows.grab.downloadZip(chatId, messageId, userId, parsed.target);
+          break;
+        case "gi":
+          if (messageId && flows.grab) await flows.grab.downloadFiltered(chatId, messageId, userId, parsed.target, "image");
+          break;
+        case "gv":
+          if (messageId && flows.grab) await flows.grab.downloadFiltered(chatId, messageId, userId, parsed.target, "video");
+          break;
         case "hub":
           if (messageId) await handleHub(chatId, messageId, userId, parsed.target);
           break;
@@ -521,6 +594,10 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     async function handleHub(chatId: number, messageId: number, userId: number, section: string): Promise<void> {
       if (section === "settings") {
         await flows.settings.menu(chatId, userId);
+        return;
+      }
+      if (section === "movies" && flows.movies) {
+        await flows.movies.categories(chatId, userId);
         return;
       }
       const hint = section === "music" ? t("hub.hint.music") : section === "url" ? t("hub.hint.url") : t("hub.hint.soon");

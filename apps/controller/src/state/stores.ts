@@ -58,6 +58,22 @@ export class ManifestSessions {
   }
 }
 
+/** Short-lived mass media grabber sessions. TTL 30 min. */
+export class GrabSessions {
+  private cache = new TtlCache<{ id: string; result: import("@pappy/media-manifest").GrabResult }>(500, 30 * 60_000);
+  private seq = 1;
+
+  create(result: import("@pappy/media-manifest").GrabResult): { id: string } {
+    const id = `g${(this.seq++).toString(36)}${Date.now().toString(36).slice(-4)}`;
+    this.cache.set(id, { id, result });
+    return { id };
+  }
+
+  get(id: string): { id: string; result: import("@pappy/media-manifest").GrabResult } | undefined {
+    return this.cache.get(id);
+  }
+}
+
 /** Pending DM queries awaiting disambiguation (query text never fits callback_data). TTL 10 min. */
 export class PendingQueries {
   private cache = new TtlCache<{ query: string; userId: number }>(2000, 10 * 60_000);

@@ -14,11 +14,15 @@ import { createApiCall, setupBot } from "./bot/setup.js";
 import { DeliveryService } from "./bot/delivery.js";
 import { MusicFlow } from "./bot/music.js";
 import { UrlFlow } from "./bot/urls.js";
+import { InlineFlow } from "./bot/inline.js";
 import { LibraryFlow } from "./bot/library-flow.js";
 import { BanList, ForceJoin, Origins } from "./bot/guards.js";
+import { Presence } from "./bot/presence.js";
+import { ShareLinks } from "./bot/share.js";
 import { SettingsFlow } from "./bot/settings.js";
 import { OwnerFlow } from "./bot/owner.js";
 import { Library } from "./state/library.js";
+import { CancelRegistry } from "./state/cancel.js";
 import { FileIdCache, ManifestSessions, SearchSessions, UserPrefs, UsersSeen } from "./state/stores.js";
 import { createHealthApp } from "./health.js";
 
@@ -29,6 +33,16 @@ import { createHealthApp } from "./health.js";
 export function maxUploadBytesFor(botApiRoot: string | null): number {
   return botApiRoot ? 1900 * 1024 * 1024 : 48 * 1024 * 1024;
 }
+
+const BASE_COMMANDS = [
+  { command: "music", description: "Search songs" },
+  { command: "dl", description: "Download from a link" },
+  { command: "playlist", description: "Your playlists" },
+  { command: "playlist_new", description: "Create a playlist" },
+  { command: "favorites", description: "Your favorites" },
+  { command: "history", description: "Recent searches + downloads" },
+  { command: "settings", description: "Progress, quality, language" },
+];
 
 const require = createRequire(import.meta.url);
 // telegram-versions.json lives at repo root; dist layout is apps/controller/dist.
@@ -63,6 +77,9 @@ async function main(): Promise<void> {
     const fileIds = new FileIdCache();
     const prefs = new UserPrefs();
     const library = new Library();
+    const presence = new Presence(sender);
+    const share = new ShareLinks();
+    const cancels = new CancelRegistry();
     const delivery = new DeliveryService({
       sender,
       fileIds,
@@ -70,16 +87,41 @@ async function main(): Promise<void> {
       maxUploadBytes: maxUploadBytesFor(cfg.botApiRoot),
       fetcher: (url, jobDir, hint) => adapter.fetchMediaUrl(url, jobDir, hint),
     });
-    const music = new MusicFlow({ manager, sender, sessions: new SearchSessions(), delivery, prefs, library, log });
-    const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log);
+    const music = new MusicFlow({ manager, sender, sessions: new SearchSessions(), delivery, presence, share, cancels, prefs, library, log });
+    const urls = new UrlFlow(manager, delivery, sender, new ManifestSessions(), prefs, library, log, presence, share, cancels);
     const forcejoin = new ForceJoin(sender, log);
     const bans = new BanList();
     const origins = new Origins();
     const seen = new UsersSeen();
+    const inline = new InlineFlow(manager, bans, forcejoin, share, log);
     const settings = new SettingsFlow(sender, prefs);
     const libraryFlow = new LibraryFlow(sender, library, log);
     const owner = new OwnerFlow(sender, manager, forcejoin, bans, seen, log);
-    const bot = setupBot(cfg, sender, log, { music, urls, libraryFlow, forcejoin, bans, origins, settings, owner, prefs, seen });
+    const bot = setupBot(cfg, sender, log, { music, urls, inline, libraryFlow, forcejoin, bans, origins, presence, share, settings, owner, prefs, seen });
+
+    // Identity (powers share links) + command menu. Best-effort: the bot works
+    // without either, just with fewer shortcuts.
+    try {
+      const me = await bot.api.getMe();
+      if (me.username) share.setUsername(me.username);
+      log.info("bot identity", { username: me.username });
+    } catch (e) {
+      log.warn("getMe failed — share links disabled", { error: (e as Error).message });
+    }
+    try {
+      await sender.enqueue("setMyCommands", { commands: BASE_COMMANDS }, "background");
+      for (const oid of cfg.ownerIds) {
+        await sender.enqueue(
+          "setMyCommands",
+          { commands: [...BASE_COMMANDS, { command: "admin", description: "Owner console" }], scope: { type: "chat", chat_id: oid } },
+          "background",
+        );
+      }
+      await sender.enqueue("setChatMenuButton", { menu_button: { type: "commands" } }, "background");
+    } catch (e) {
+      log.warn("command menu registration failed", { error: (e as Error).message });
+    }
+
     log.info("starting bot (long-polling)", { localBotApi: Boolean(cfg.botApiRoot) });
     bot.start({ onStart: (me) => log.info("bot online", { username: me.username }) });
     const shutdown = async (sig: string) => {

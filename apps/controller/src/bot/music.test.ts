@@ -4,8 +4,11 @@ import type { ProviderManager, SearchItem } from "@pappy/media-manifest";
 import type { Sender } from "../telegram/sender.js";
 import { createLogger } from "../logger.js";
 import { Library } from "../state/library.js";
+import { CancelRegistry } from "../state/cancel.js";
 import { SearchSessions, UserPrefs } from "../state/stores.js";
 import type { DeliveryService } from "./delivery.js";
+import type { Presence } from "./presence.js";
+import { ShareLinks } from "./share.js";
 import { MusicFlow } from "./music.js";
 
 const ITEMS: SearchItem[] = [
@@ -13,12 +16,12 @@ const ITEMS: SearchItem[] = [
   { id: "a2", title: "No Source", author: "Ghost", pageUrl: null },
 ];
 
-function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (chatId: number, o: Record<string, unknown>) => unknown } = {}) {
-  const calls: Array<{ method: string; text: string; kb: string }> = [];
+function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (chatId: number, o: Record<string, unknown>) => unknown; username?: string } = {}) {
+  const calls: Array<{ method: string; text: string; kb: string; params: Record<string, unknown> }> = [];
   let mid = 100;
   const sender = {
     enqueue: async (method: string, params: Record<string, unknown>) => {
-      calls.push({ method, text: String(params["text"] ?? params["caption"] ?? ""), kb: JSON.stringify(params["reply_markup"] ?? {}) });
+      calls.push({ method, text: String(params["text"] ?? params["caption"] ?? ""), kb: JSON.stringify(params["reply_markup"] ?? {}), params });
       return method === "sendMessage" ? { message_id: ++mid } : { ok: true };
     },
   } as unknown as Sender;
@@ -39,8 +42,12 @@ function harness(opts: { resolveImpl?: (url: string) => unknown; deliverImpl?: (
   const sessions = new SearchSessions();
   const prefs = new UserPrefs();
   const library = new Library();
-  const flow = new MusicFlow({ manager, sender, sessions, delivery, prefs, library, log: createLogger("error") });
-  return { calls, delivered, flow, library, prefs, sessions };
+  const presence = { action: () => {}, react: () => {} } as unknown as Presence;
+  const share = new ShareLinks();
+  if (opts.username) share.setUsername(opts.username);
+  const cancels = new CancelRegistry();
+  const flow = new MusicFlow({ manager, sender, sessions, delivery, presence, share, cancels, prefs, library, log: createLogger("error") });
+  return { calls, delivered, flow, library, prefs, sessions, cancels };
 }
 
 function sidOf(calls: Array<{ kb: string }>): string {
@@ -65,8 +72,18 @@ test("music search: verbose narrates, quiet goes straight to results", async () 
   assert.match(q.calls[0].text, /Fall Back/);
 });
 
-test("music select: detail card carries download + save; expired sessions say so", async () => {
+test("music search quotes the user's message when replyTo is known", async () => {
   const h = harness();
+  await h.flow.search(7, 9001, "lithe", "en", 41);
+  assert.deepEqual(h.calls[0].params["reply_parameters"], { message_id: 41 });
+  const q = harness();
+  q.prefs.set(9002, { verbose: false });
+  await q.flow.search(7, 9002, "lithe", "en", 42);
+  assert.deepEqual(q.calls[0].params["reply_parameters"], { message_id: 42 });
+});
+
+test("music select: detail card carries download + save + share; expired sessions say so", async () => {
+  const h = harness({ username: "PappyDLBot" });
   await h.flow.search(7, 9001, "lithe");
   const sid = sidOf(h.calls);
   await h.flow.select(7, 50, `${sid}:0`);
@@ -74,6 +91,7 @@ test("music select: detail card carries download + save; expired sessions say so
   assert.match(detail.text, /Fall Back/);
   assert.match(detail.kb, /v1\.md\./);
   assert.match(detail.kb, /v1\.mf\./);
+  assert.match(detail.kb, /t\.me\/PappyDLBot\?start=m_/);
   await h.flow.select(7, 50, "dead:0");
   assert.match(h.calls[h.calls.length - 1].text, /expired/);
 });
@@ -89,6 +107,21 @@ test("music download: delivery receipt + history; missing source is honest", asy
   assert.deepEqual(h.library.history(9001).downloads, ["Fall Back"]);
   await h.flow.download(7, 60, 9001, `${sid}:1`);
   assert.match(h.calls[h.calls.length - 1].text, /didn't expose/);
+});
+
+test("music download honors cancel before and during delivery", async () => {
+  const h = harness();
+  await h.flow.search(7, 9001, "lithe");
+  const sid = sidOf(h.calls);
+  h.cancels.cancel(7, 61);
+  await h.flow.download(7, 61, 9001, `${sid}:0`);
+  assert.match(h.calls[h.calls.length - 1].text, /Cancelled/);
+  assert.equal(h.delivered.length, 0);
+
+  const h2 = harness({ deliverImpl: () => ({ status: "cancelled" }) });
+  await h2.flow.search(7, 9001, "lithe");
+  await h2.flow.download(7, 62, 9001, `${sidOf(h2.calls)}:0`);
+  assert.match(h2.calls[h2.calls.length - 1].text, /Cancelled/);
 });
 
 test("music download maps auth-gated resolve to the gated card", async () => {

@@ -23,16 +23,42 @@ export function isUpload(v: unknown): v is UploadValue {
 
 /** Split params into JSON body or multipart FormData. Returns headers to merge. */
 export function encodeParams(params: Record<string, unknown>): { multipart: boolean; body: string | FormData } {
-  const hasFile = Object.values(params).some(isUpload);
-  if (!hasFile) return { multipart: false, body: JSON.stringify(params) };
-  const form = new FormData();
-  for (const [k, v] of Object.entries(params)) {
+  // Nested uploads (media-group arrays) become attach:// references; top-level
+  // uploads keep the original convention (file under its own param key).
+  const nested: Array<{ field: string; value: UploadValue }> = [];
+  let n = 0;
+  const deepReplace = (v: unknown): unknown => {
     if (isUpload(v)) {
-      const blob = new Blob([new Uint8Array(v.__upload.buffer)], { type: v.__upload.contentType });
-      form.append(k, blob, v.__upload.filename);
+      const field = `file${n++}`;
+      nested.push({ field, value: v });
+      return `attach://${field}`;
+    }
+    if (Buffer.isBuffer(v)) return v;
+    if (Array.isArray(v)) return v.map(deepReplace);
+    if (v && typeof v === "object") {
+      const o: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v)) o[k] = deepReplace(x);
+      return o;
+    }
+    return v;
+  };
+  const mapped: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(params)) mapped[k] = isUpload(v) ? v : deepReplace(v);
+
+  const hasTop = Object.values(mapped).some(isUpload);
+  if (!hasTop && !nested.length) return { multipart: false, body: JSON.stringify(params) };
+  const form = new FormData();
+  for (const [k, v] of Object.entries(mapped)) {
+    if (isUpload(v)) {
+      form.append(k, toBlob(v), v.__upload.filename);
     } else if (v !== undefined && v !== null) {
       form.append(k, typeof v === "object" ? JSON.stringify(v) : String(v));
     }
   }
+  for (const { field, value } of nested) form.append(field, toBlob(value), value.__upload.filename);
   return { multipart: true, body: form };
+}
+
+function toBlob(v: UploadValue): Blob {
+  return new Blob([new Uint8Array(v.__upload.buffer)], { type: v.__upload.contentType });
 }

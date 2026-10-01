@@ -95,12 +95,9 @@ export class ForceJoin {
 export function renderJoinCard(missing: JoinTarget[], originId: string, locale = "en"): FallbackMessage {
   const lines = [`*${t("fj.title", {}, locale)}*`, "", t("fj.body", {}, locale), ""];
   for (const tgt of missing) lines.push(`· ${tgt.title}`);
-  const rows = missing.map((tgt) => [{ text: `➕ ${tgt.title.slice(0, 30)}`, url: tgt.invite }]);
-  rows.push([{ text: t("fj.verify", {}, locale), callback_data: packCb("fj", originId, 1) } as unknown as { text: string; url: string }]);
-  return {
-    text: lines.join("\n"),
-    reply_markup: { inline_keyboard: rows as unknown as Array<Array<{ text: string; callback_data: string }>> },
-  };
+  const rows: Array<Array<{ text: string; callback_data?: string; url?: string }>> = missing.map((tgt) => [{ text: `➕ ${tgt.title.slice(0, 30)}`, url: tgt.invite }]);
+  rows.push([{ text: t("fj.verify", {}, locale), callback_data: packCb("fj", originId, 1) }]);
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 
 export class BanList {
@@ -120,7 +117,7 @@ export class BanList {
 }
 
 export interface OriginCtx {
-  kind: "music" | "url";
+  kind: "music" | "url" | "note";
   query: string;
 }
 

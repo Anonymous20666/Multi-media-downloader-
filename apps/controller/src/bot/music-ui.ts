@@ -4,7 +4,7 @@
  */
 import type { SearchItem } from "@pappy/media-manifest";
 import { t } from "../i18n/index.js";
-import { packCb, type FallbackMessage } from "../ui/components.js";
+import { packCb, type FallbackMessage, type KbButton } from "../ui/components.js";
 
 function fmtDuration(sec: number | null | undefined): string {
   if (sec == null) return "";
@@ -23,7 +23,7 @@ export function renderMusicResults(query: string, sessionId: string, items: Sear
   return { text: lines.join("\n"), reply_markup: { inline_keyboard: keyboard } };
 }
 
-export function renderMusicDetail(sessionId: string, idx: number, it: SearchItem, locale = "en"): FallbackMessage {
+export function renderMusicDetail(sessionId: string, idx: number, it: SearchItem, locale = "en", shareUrl?: string | null): FallbackMessage {
   const dur = fmtDuration(it.duration);
   const lines = [
     `*${escapeMd(it.title)}*`,
@@ -31,21 +31,18 @@ export function renderMusicDetail(sessionId: string, idx: number, it: SearchItem
     dur ? `${t("music.detail.duration", {}, locale)}: \`${dur}\`` : "",
     it.previewKind ? `${t("music.detail.source", {}, locale)}: ${it.previewKind}` : "",
   ].filter(Boolean);
-  return {
-    text: lines.join("\n"),
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: t("music.detail.download", {}, locale), callback_data: packCb("md", `${sessionId}:${idx}`, 1) },
-          { text: t("music.detail.queue", {}, locale), callback_data: packCb("mq", `${sessionId}:${idx}`, 1) },
-        ],
-        [
-          { text: t("music.detail.save", {}, locale), callback_data: packCb("mf", `${sessionId}:${idx}`, 1) },
-          { text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) },
-        ],
-      ],
-    },
-  };
+  const rows: KbButton[][] = [
+    [
+      { text: t("music.detail.download", {}, locale), callback_data: packCb("md", `${sessionId}:${idx}`, 1) },
+      { text: t("music.detail.queue", {}, locale), callback_data: packCb("mq", `${sessionId}:${idx}`, 1) },
+    ],
+    [
+      { text: t("music.detail.save", {}, locale), callback_data: packCb("mf", `${sessionId}:${idx}`, 1) },
+      { text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) },
+    ],
+  ];
+  if (shareUrl) rows.push([{ text: t("common.share", {}, locale), url: shareUrl }]);
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 
 export function renderMusicRich(query: string, sessionId: string, items: SearchItem[], locale = "en"): Record<string, unknown> {
@@ -72,5 +69,5 @@ export function renderMusicError(query: string, locale = "en"): FallbackMessage 
 }
 
 function escapeMd(s: string): string {
-  return String(s).replace(/([_*[\]()~`>#+\-=|{}.!])/g, "\\$1").slice(0, 200);
+  return String(s).replace(/([_*[\\]()~`>#+\\-=|{}.!])/g, "\\$1").slice(0, 200);
 }

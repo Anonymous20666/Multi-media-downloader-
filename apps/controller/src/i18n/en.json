@@ -94,5 +94,14 @@
   "hub.hint.music": "Type any song or artist name and I will search.",
   "hub.hint.url": "Paste any video or post link and I will fetch it.",
   "hub.hint.soon": "Not in V1 — music search + link downloads work today. Try those.",
-  "common.back": "‹ Back"
+  "common.back": "‹ Back",
+  "common.share": "🔗 Share",
+  "inline.banned": "🚫 Banned — open Pappy for details",
+  "inline.hint": "🔎 Type a song name…",
+  "inline.locked": "🔐 Join channels to unlock search",
+  "inline.fail": "❌ Search failed — try in Pappy",
+  "inline.preview_cap": "🎧 30s preview — full track in Pappy",
+  "inline.full": "⬇ Full track",
+  "inline.open": "Open in Pappy",
+  "fj.inline_ready": "✅ Verified — use me inline in any chat now!"
 }

@@ -51,9 +51,15 @@ export function hubSections(locale = "en"): HubSection[] {
   ];
 }
 
+export interface KbButton {
+  text: string;
+  callback_data?: string;
+  url?: string;
+}
+
 export interface FallbackMessage {
   text: string;
-  reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+  reply_markup: { inline_keyboard: Array<Array<KbButton>> };
 }
 
 /** /start hub — Concept C content, fallback renderer (works on every client). */

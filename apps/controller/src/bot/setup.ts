@@ -5,6 +5,8 @@
  *
  * V1 routes: music search, paste-a-link galleries, library, settings, owner.
  * Provider-costing actions pass the gate (bans + force-join); local reads don't.
+ * Feel layer: inline mode everywhere, deep-link /start payloads, 👀 on receipt,
+ * quoted replies, alert-toasts for real errors (not silent toasts).
  */
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Config } from "../config.js";
@@ -15,8 +17,11 @@ import { encodeParams } from "../telegram/uploads.js";
 import { renderHubFallback, renderHubRich, unpackCb } from "../ui/components.js";
 import type { MusicFlow } from "./music.js";
 import { isHttpUrl, type UrlFlow } from "./urls.js";
+import type { InlineFlow } from "./inline.js";
 import type { LibraryFlow } from "./library-flow.js";
 import { BanList, ForceJoin, Origins, renderJoinCard } from "./guards.js";
+import type { Presence } from "./presence.js";
+import { ShareLinks, type ShareKind } from "./share.js";
 import type { SettingsFlow } from "./settings.js";
 import { isOwner, type OwnerFlow } from "./owner.js";
 import { UserPrefs, UsersSeen } from "../state/stores.js";
@@ -49,10 +54,13 @@ export function createApiCall(cfg: Config): ApiCall {
 export interface BotFlows {
   music: MusicFlow;
   urls: UrlFlow;
+  inline: InlineFlow;
   libraryFlow: LibraryFlow;
   forcejoin: ForceJoin;
   bans: BanList;
   origins: Origins;
+  presence: Presence;
+  share: ShareLinks;
   settings: SettingsFlow;
   owner: OwnerFlow;
   prefs: UserPrefs;
@@ -93,10 +101,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
 
   const argText = (text: string, cmd: string): string => text.replace(new RegExp(`^/${cmd}(@\\w+)?\\s*`), "");
 
-  bot.command("start", async (ctx) => {
-    const chatId = ctx.chatId;
-    if (!chatId) return;
-    if (ctx.from) flows.seen.record(ctx.from.id);
+  async function showHub(chatId: number): Promise<void> {
     try {
       await sender.enqueue("sendRichMessage", { chat_id: chatId, ...renderHubRich() }, "interactive");
       log.info("start rendered", { mode: "rich", chatId });
@@ -105,7 +110,46 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
       await sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive");
       log.info("start rendered", { mode: "fallback", chatId, richError: (e as Error).message });
     }
+  }
+
+  bot.command("start", async (ctx) => {
+    const chatId = ctx.chatId;
+    if (!chatId || !ctx.from) return;
+    flows.seen.record(ctx.from.id);
+    const payload = argText(ctx.message?.text ?? "", "start").trim();
+    if (!payload) {
+      await showHub(chatId);
+      return;
+    }
+    await routeDeepLink(chatId, ctx.from.id, ctx.message?.message_id, payload);
   });
+
+  async function routeDeepLink(chatId: number, userId: number, replyTo: number | undefined, payload: string): Promise<void> {
+    const link = ShareLinks.decode(payload);
+    if (!link) {
+      await showHub(chatId);
+      return;
+    }
+    const kind: ShareKind = link.kind;
+    if (kind === "banned") {
+      await sender.enqueue("sendMessage", { chat_id: chatId, text: t("fj.banned") }, "interactive").catch(() => {});
+      return;
+    }
+    if (kind === "verify") {
+      const res = await flows.forcejoin.check(userId);
+      if (res.ok) {
+        await showHub(chatId);
+        return;
+      }
+      const oid = flows.origins.stash({ kind: "note", query: "inline" });
+      const card = renderJoinCard(res.missing, oid);
+      await sender.enqueue("sendMessage", { chat_id: chatId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup }, "interactive").catch(() => {});
+      return;
+    }
+    if (!(await gate(chatId, userId, kind, link.value))) return;
+    if (kind === "music") await flows.music.search(chatId, userId, link.value, "en", replyTo);
+    else await flows.urls.submit(chatId, userId, link.value, "en", replyTo);
+  }
 
   bot.command("ping", async (ctx) => {
     if (!ctx.chatId) return;
@@ -114,23 +158,25 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
   });
 
   bot.command("music", async (ctx) => {
-    if (!ctx.chatId || !ctx.from) return;
+    if (!ctx.chatId || !ctx.from || !ctx.message) return;
     flows.seen.record(ctx.from.id);
-    const q = argText(ctx.message?.text ?? "", "music");
+    flows.presence.react(ctx.chatId, ctx.message.message_id, "👀");
+    const q = argText(ctx.message.text ?? "", "music");
     if (!(await gate(ctx.chatId, ctx.from.id, "music", q))) return;
-    await flows.music.search(ctx.chatId, ctx.from.id, q);
+    await flows.music.search(ctx.chatId, ctx.from.id, q, "en", ctx.message.message_id);
   });
 
   bot.command("dl", async (ctx) => {
-    if (!ctx.chatId || !ctx.from) return;
+    if (!ctx.chatId || !ctx.from || !ctx.message) return;
     flows.seen.record(ctx.from.id);
-    const url = argText(ctx.message?.text ?? "", "dl");
+    flows.presence.react(ctx.chatId, ctx.message.message_id, "👀");
+    const url = argText(ctx.message.text ?? "", "dl");
     if (!url) {
       await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("hub.hint.url") }, "interactive").catch(() => {});
       return;
     }
     if (!(await gate(ctx.chatId, ctx.from.id, "url", url))) return;
-    await flows.urls.submit(ctx.chatId, ctx.from.id, url);
+    await flows.urls.submit(ctx.chatId, ctx.from.id, url, "en", ctx.message.message_id);
   });
 
   bot.command("playlist", async (ctx) => {
@@ -230,6 +276,15 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("own.done") }, "interactive").catch(() => {});
   });
 
+  bot.on("inline_query", async (ctx) => {
+    const q = ctx.inlineQuery;
+    flows.seen.record(q.from.id);
+    const ans = await flows.inline.answer(q.from.id, q.query);
+    await sender
+      .enqueue("answerInlineQuery", { inline_query_id: q.id, ...ans }, "interactive")
+      .catch((e) => log.warn("answerInlineQuery failed", { error: (e as Error).message }));
+  });
+
   bot.on("callback_query:data", async (ctx) => {
     const parsed = unpackCb(ctx.callbackQuery.data);
     const cqId = ctx.callbackQuery.id;
@@ -237,13 +292,14 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     flows.seen.record(userId);
     // Toast actions answer with text; everything else gets a bare ack at the end.
     // (Telegram honors ONE answer per query — never pre-ack before the switch.)
+    // Real problems (expired, still locked, banned) pop an alert; micro-feedback stays a toast.
     let answered = false;
-    const toast = (text: string) => {
+    const toast = (text: string, alert = false) => {
       answered = true;
-      return sender.enqueue("answerCallbackQuery", { callback_query_id: cqId, text: text.slice(0, 200), show_alert: false }, "control").catch(() => {});
+      return sender.enqueue("answerCallbackQuery", { callback_query_id: cqId, text: text.slice(0, 200), show_alert: alert }, "control").catch(() => {});
     };
     if (flows.bans.isBanned(userId)) {
-      await toast(t("fj.banned"));
+      await toast(t("fj.banned"), true);
       return;
     }
     if (!parsed || !ctx.chatId) return; // bare ack below
@@ -260,12 +316,16 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "mx":
           if (messageId) await flows.music.cancel(chatId, messageId);
           break;
-        case "mq":
-          await toast(flows.music.queue(userId, parsed.target) ? t("music.queue.added") : t("music.session.expired"));
+        case "mq": {
+          const ok = flows.music.queue(userId, parsed.target);
+          await toast(ok ? t("music.queue.added") : t("music.session.expired"), !ok);
           break;
-        case "mf":
-          await toast(flows.music.save(userId, parsed.target) ? t("music.saved") : t("music.session.expired"));
+        }
+        case "mf": {
+          const ok = flows.music.save(userId, parsed.target);
+          await toast(ok ? t("music.saved") : t("music.session.expired"), !ok);
           break;
+        }
         case "us":
           if (messageId) await flows.urls.download(chatId, messageId, userId, parsed.target);
           break;
@@ -311,28 +371,28 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           break;
         case "po":
           if (!isOwner(ownerIds, userId)) {
-            await toast(t("own.only"));
+            await toast(t("own.only"), true);
             break;
           }
           if (messageId) await flows.owner.providers(chatId, messageId);
           break;
         case "pt":
           if (!isOwner(ownerIds, userId)) {
-            await toast(t("own.only"));
+            await toast(t("own.only"), true);
             break;
           }
           if (messageId) await flows.owner.toggleProvider(chatId, messageId, userId, parsed.target);
           break;
         case "pf":
           if (!isOwner(ownerIds, userId)) {
-            await toast(t("own.only"));
+            await toast(t("own.only"), true);
             break;
           }
           await flows.owner.fjAdmin(chatId);
           break;
         case "pu":
           if (!isOwner(ownerIds, userId)) {
-            await toast(t("own.only"));
+            await toast(t("own.only"), true);
             break;
           }
           await flows.owner.users(chatId);
@@ -353,7 +413,11 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         const origin = flows.origins.pop(originId);
         await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("fj.verified") }, "interactive").catch(() => {});
         if (!origin) {
-          await toast(t("fj.expired"));
+          await toast(t("fj.expired"), true);
+          return;
+        }
+        if (origin.kind === "note") {
+          await toast(t("fj.inline_ready"));
           return;
         }
         await toast(t("fj.verified"));
@@ -362,7 +426,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
       } else {
         const card = renderJoinCard(res.missing, originId);
         await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup }, "interactive").catch(() => {});
-        await toast(t("fj.still_missing"));
+        await toast(t("fj.still_missing"), true);
       }
     }
 
@@ -397,13 +461,14 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return; // unknown command — ignore quietly
     if (ctx.chat?.type !== "private") return;
+    flows.presence.react(ctx.chatId, ctx.message.message_id, "👀");
     if (isHttpUrl(text)) {
       if (!(await gate(ctx.chatId, ctx.from.id, "url", text))) return;
-      await flows.urls.submit(ctx.chatId, ctx.from.id, text);
+      await flows.urls.submit(ctx.chatId, ctx.from.id, text, "en", ctx.message.message_id);
       return;
     }
     if (!(await gate(ctx.chatId, ctx.from.id, "music", text))) return;
-    await flows.music.search(ctx.chatId, ctx.from.id, text);
+    await flows.music.search(ctx.chatId, ctx.from.id, text, "en", ctx.message.message_id);
   });
 
   bot.catch((err) => {

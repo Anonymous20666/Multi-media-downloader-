@@ -5,7 +5,7 @@ import { packCb, type FallbackMessage } from "../ui/components.js";
 const ICON: Record<string, string> = { image: "🖼", video: "🎬", audio: "🎵", document: "📄" };
 
 /** Gallery card: one numbered row + button per SHOWN item, capped-disclosure line, download-all. */
-export function renderGallery(m: MediaManifest, sid: string, shown: number, locale = "en"): FallbackMessage {
+export function renderGallery(m: MediaManifest, sid: string, shown: number, locale = "en", shareUrl?: string | null): FallbackMessage {
   const total = m.media.length;
   const lines = [`*${t("url.gallery.title", { p: m.platform }, locale)}*`, ""];
   if (m.title) lines.push(escapeMd(m.title));
@@ -18,6 +18,7 @@ export function renderGallery(m: MediaManifest, sid: string, shown: number, loca
   const rows: FallbackMessage["reply_markup"]["inline_keyboard"] = [];
   for (let i = 0; i < shown; i++) rows.push([{ text: `⬇ ${i + 1}`, callback_data: packCb("us", `${sid}:${i}`, 1) }]);
   if (total > 1) rows.push([{ text: t("url.gallery.all", { n: Math.min(shown, total) }, locale), callback_data: packCb("ua", sid, 1) }]);
+  if (shareUrl) rows.push([{ text: t("common.share", {}, locale), url: shareUrl }]);
   return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 

@@ -6,7 +6,13 @@ sessions + providers + queues + workers + AI + streaming engine + persistent sta
 **Status: V1 complete (see `docs/00-PAPPY-OMEGA-MASTER-PLAN.md` §T).** Music search →
 detail → download + `file_id` reuse, paste-a-link galleries with capped batch (25),
 playlists/favorites/history, force-join + bans, settings, owner console, load
-harness. Next: VPS verification, then V1.5 streaming alpha.
+harness. Feel layer: albums, inline mode with 30s previews, typing/upload indicators
++ reactions, share deep-links, real cancel, quoted replies, command menu.
+Next: VPS verification, then V1.5 streaming alpha.
+
+> BotFather setup for the feel layer: enable **Inline Mode** (`/setinline`) with a
+> placeholder like `Search songs…`, so `@<bot> <song>` works in any chat.
+> Everything else (menu button, commands) registers itself on boot.
 
 ## Quickstart (VPS)
 

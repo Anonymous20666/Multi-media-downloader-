@@ -2,6 +2,8 @@
  * Music: search → detail → guarded download → sendAudio.
  * Slice 2: downloads ride DeliveryService (shared with URLs), verbose pref gates
  * progress chatter, downloads land in history, ❤ saves to Queue + favorites.
+ * Feel layer: typing indicators, quoted replies, ✅/🔥/😢 reactions on your
+ * message, share links, and a ✕ that really stops the work.
  * Decoupled from grammY ctx (plain IDs) so the whole flow is unit-testable.
  */
 import type { MediaManifest, ProviderManager, SearchItem } from "@pappy/media-manifest";
@@ -10,9 +12,12 @@ import { t } from "../i18n/index.js";
 import { Sender } from "../telegram/sender.js";
 import { renderProgress, type OpStage } from "../ui/components.js";
 import { DeliveryService } from "./delivery.js";
+import { Presence } from "./presence.js";
+import { ShareLinks } from "./share.js";
 import { mapResolveError } from "./urls.js";
 import { renderMusicDetail, renderMusicError, renderMusicResults } from "./music-ui.js";
 import { Library } from "../state/library.js";
+import { CancelRegistry } from "../state/cancel.js";
 import { SearchSessions, UserPrefs } from "../state/stores.js";
 
 export interface MusicDeps {
@@ -20,6 +25,9 @@ export interface MusicDeps {
   sender: Sender;
   sessions: SearchSessions;
   delivery: DeliveryService;
+  presence: Presence;
+  share: ShareLinks;
+  cancels: CancelRegistry;
   prefs: UserPrefs;
   library: Library;
   log: Logger;
@@ -36,6 +44,9 @@ export class MusicFlow {
   private manager: ProviderManager;
   private sender: Sender;
   private delivery: DeliveryService;
+  private presence: Presence;
+  private share: ShareLinks;
+  private cancels: CancelRegistry;
   private prefs: UserPrefs;
   private library: Library;
   private log: Logger;
@@ -45,13 +56,16 @@ export class MusicFlow {
     this.sender = deps.sender;
     this.sessions = deps.sessions;
     this.delivery = deps.delivery;
+    this.presence = deps.presence;
+    this.share = deps.share;
+    this.cancels = deps.cancels;
     this.prefs = deps.prefs;
     this.library = deps.library;
     this.log = deps.log.child({ flow: "music" });
   }
 
-  /** /music <query> or DM free-text. */
-  async search(chatId: number, userId: number, query: string, locale = "en"): Promise<void> {
+  /** /music <query> or DM free-text. replyTo quotes the user's message. */
+  async search(chatId: number, userId: number, query: string, locale = "en", replyTo?: number): Promise<void> {
     const q = query.trim();
     if (!q) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("music.search.prompt", {}, locale) }, "interactive");
@@ -59,17 +73,19 @@ export class MusicFlow {
     }
     const verbose = this.prefs.get(userId).verbose;
     this.library.pushSearch(userId, q);
+    this.presence.action(chatId, "typing");
+    const quote = replyTo ? { reply_parameters: { message_id: replyTo } } : {};
     let statusId = 0;
     if (verbose) {
       statusId = await msgId(
-        this.sender.enqueue("sendMessage", { chat_id: chatId, text: renderProgress(q, "searching", "", locale), parse_mode: "Markdown" }, "interactive"),
+        this.sender.enqueue("sendMessage", { chat_id: chatId, text: renderProgress(q, "searching", "", locale), parse_mode: "Markdown", ...quote }, "interactive"),
       );
     }
     const done = async (text: string, kb?: unknown) => {
       if (verbose) {
         await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: statusId, text, parse_mode: "Markdown", ...(kb ? { reply_markup: kb } : {}) }, "interactive");
       } else {
-        await this.sender.enqueue("sendMessage", { chat_id: chatId, text, parse_mode: "Markdown", ...(kb ? { reply_markup: kb } : {}) }, "interactive");
+        await this.sender.enqueue("sendMessage", { chat_id: chatId, text, parse_mode: "Markdown", ...quote, ...(kb ? { reply_markup: kb } : {}) }, "interactive");
       }
     };
     try {
@@ -77,15 +93,18 @@ export class MusicFlow {
       if (!items.length) {
         const card = renderMusicError(q, locale);
         await done(card.text, card.reply_markup);
+        if (replyTo) this.presence.react(chatId, replyTo, "😢");
         return;
       }
       const session = this.sessions.create(q, items);
       const card = renderMusicResults(q, session.id, items, locale);
       await done(verbose ? `${renderProgress(q, "found", "", locale)}\n\n${card.text}` : card.text, card.reply_markup);
+      if (replyTo) this.presence.react(chatId, replyTo, "✅");
     } catch (e) {
       this.log.warn("music search failed", { error: (e as Error).message });
       const card = renderMusicError(q, locale);
       await done(card.text, card.reply_markup);
+      if (replyTo) this.presence.react(chatId, replyTo, "😢");
     }
   }
 
@@ -97,7 +116,7 @@ export class MusicFlow {
       await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("music.session.expired", {}, locale) }, "interactive");
       return;
     }
-    const card = renderMusicDetail(sid, Number(idxRaw), item, locale);
+    const card = renderMusicDetail(sid, Number(idxRaw), item, locale, this.share.music(item.title));
     await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: card.text, parse_mode: "Markdown", reply_markup: card.reply_markup }, "interactive");
   }
 
@@ -114,20 +133,35 @@ export class MusicFlow {
     const stage = (s: OpStage, detail = "") =>
       this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: renderProgress(title, s, detail, locale), parse_mode: "Markdown" }, "interactive");
     const fail = (detail: string) => stage("failed", detail);
+    const cancelled = () => this.cancels.isCancelled(chatId, messageId);
+    const stop = async () => {
+      this.cancels.clear(chatId, messageId);
+      await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("common.cancelled", {}, locale) }, "interactive");
+    };
 
     try {
       if (!item.pageUrl) {
         await fail(t("music.download.noSource", {}, locale));
         return;
       }
+      if (cancelled()) {
+        await stop();
+        return;
+      }
       if (verbose) await stage("preparing");
+      this.presence.action(chatId, "document");
       const { manifest } = await this.manager.resolve(item.pageUrl);
       const media = pickAudio(manifest);
       if (!media) {
         await fail(t("music.download.gated", {}, locale));
         return;
       }
+      if (cancelled()) {
+        await stop();
+        return;
+      }
       if (verbose) await stage("downloading");
+      this.presence.action(chatId, "document");
       const out = await this.delivery.deliver(chatId, {
         key: `${manifest.dedupeKey}:audio`,
         kind: "audio",
@@ -135,7 +169,12 @@ export class MusicFlow {
         title,
         performer: item.author ?? undefined,
         duration: item.duration ?? undefined,
+        signal: cancelled,
       });
+      if (out.status === "cancelled") {
+        await stop();
+        return;
+      }
       if (out.status === "too-large") {
         await fail(t("music.download.tooLarge", { mb: Math.round(out.bytes / 1024 / 1024) }, locale));
         return;
@@ -171,6 +210,7 @@ export class MusicFlow {
   }
 
   async cancel(chatId: number, messageId: number, locale = "en"): Promise<void> {
+    this.cancels.cancel(chatId, messageId);
     await this.sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, text: t("common.cancelled", {}, locale) }, "interactive");
   }
 }

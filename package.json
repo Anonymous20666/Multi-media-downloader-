@@ -7,7 +7,7 @@
   "scripts": {
     "build": "npm run build -w @pappy/media-manifest && npm run build -w @pappy/controller",
     "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run build -w @pappy/media-manifest && npm run test --workspaces",
+    "test": "npm run build -w @pappy/media-manifest && npm run test --workspaces && PYTHONPATH=workers/stream-py python3 -m unittest discover -s workers/stream-py/worker/tests",
     "dev": "npm run dev -w @pappy/controller"
   },
   "engines": {

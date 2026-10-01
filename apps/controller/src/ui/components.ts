@@ -88,7 +88,17 @@ export function renderHubFallback(locale = "en"): FallbackMessage {
  */
 export function renderHubRich(locale = "en"): Record<string, unknown> {
   const sections = hubSections(locale);
+  const rows: FallbackMessage["reply_markup"]["inline_keyboard"] = [];
+  for (let i = 0; i < sections.length; i += 2) {
+    rows.push(sections.slice(i, i + 2).map((s) => ({ text: s.label, callback_data: s.callback })));
+  }
+  const html = `<b>${t("start.hub.title", {}, locale)}</b>\n<i>${t("start.hub.body", {}, locale)}</i>\n\n` +
+    sections.map((s) => `${s.label} — <i>${s.hint}</i>`).join("\n") +
+    `\n\n<i>${t("start.hub.hint", {}, locale)}</i>`;
+
   return {
+    rich_message: JSON.stringify({ html }),
+    reply_markup: { inline_keyboard: rows },
     blocks: [
       { type: "section_heading", text: t("start.hub.title", {}, locale) },
       { type: "paragraph", text: t("start.hub.body", {}, locale) },

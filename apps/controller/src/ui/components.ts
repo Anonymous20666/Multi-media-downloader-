@@ -81,10 +81,12 @@ export function renderHubFallback(locale = "en"): FallbackMessage {
   return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 
+export * from "./rich-components.js";
+import { RichMessageBuilder } from "./rich-components.js";
+
 /**
- * /start hub — rich renderer (Bot API 10.3 blocks + in-message buttons).
- * Loose typing is deliberate: generated frameworks lag behind new methods (X10/Q5),
- * so rich payloads go over raw HTTPS and degrade to fallback on ANY error.
+ * /start hub — Concept 1: The Media Matrix & Terminal Deck.
+ * Uses verified Telegram Bot API 10.3 native blocks (heading, table, details, pre).
  */
 export function renderHubRich(locale = "en"): Record<string, unknown> {
   const sections = hubSections(locale);
@@ -92,32 +94,75 @@ export function renderHubRich(locale = "en"): Record<string, unknown> {
   for (let i = 0; i < sections.length; i += 2) {
     rows.push(sections.slice(i, i + 2).map((s) => ({ text: s.label, callback_data: s.callback })));
   }
-  const html = `<b>${t("start.hub.title", {}, locale)}</b>\n<i>${t("start.hub.body", {}, locale)}</i>\n\n` +
-    sections.map((s) => `${s.label} — <i>${s.hint}</i>`).join("\n") +
-    `\n\n<i>${t("start.hub.hint", {}, locale)}</i>`;
+
+  const builder = new RichMessageBuilder()
+    .heading(2, "⸸ PAPPY / OMEGA")
+    .divider()
+    .paragraph(
+      "Next-generation Telegram media platform. High-density discovery, lossless music, 4K/1080p cinema, voice chat streaming, and batch downloader.",
+    )
+    .table(
+      [
+        [
+          { text: "Service", is_header: true, align: "center", valign: "middle" },
+          { text: "Quality / Format", is_header: true, align: "center", valign: "middle" },
+          { text: "Capabilities", is_header: true, align: "center", valign: "middle" },
+        ],
+        [
+          { text: "🎵 Music", align: "left", valign: "middle" },
+          { text: "FLAC / 320k", align: "left", valign: "middle" },
+          { text: "Play · Download · Stream VC", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "🎬 Movies", align: "left", valign: "middle" },
+          { text: "4K UHD · 1080p", align: "left", valign: "middle" },
+          { text: "Full Film · Subs · Trailers", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "📺 Series", align: "left", valign: "middle" },
+          { text: "Multi-Season / Anime", align: "left", valign: "middle" },
+          { text: "Episode Packs · Multi-Audio", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "📡 Live VC", align: "left", valign: "middle" },
+          { text: "Voice Chat Radio", align: "left", valign: "middle" },
+          { text: "24/7 Group Stream · Queue", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "📌 Visuals", align: "left", valign: "middle" },
+          { text: "Pinterest & URLs", align: "left", valign: "middle" },
+          { text: "Batch Galleries · Original Res", align: "left", valign: "middle" },
+        ],
+      ],
+      { is_bordered: true, is_striped: true },
+    )
+    .details("⚡ Quick Commands & Natural Language", [
+      {
+        type: "paragraph",
+        text: "Talk naturally or send direct commands anywhere in chat:",
+      },
+      {
+        type: "pre",
+        text: "• /play <track or artist>\n• /grab <webpage or gallery url>\n• 'Pappy stream Lithe in VC'\n• 'Pappy find sad romance movies'",
+      },
+    ])
+    .details("⚙️ Engine Architecture & Gateway Specs", [
+      {
+        type: "pre",
+        text: "API Version: Telegram Bot API 10.3 Native\nGateway Max Upload: 2,000 MB (2 GB)\nStream Engine: py-tgcalls 2.3.3 / ntgcalls 2.2.5\nStatus: Operational",
+        language: "yaml",
+      },
+    ]);
+
+  const rendered = builder.build();
 
   return {
-    rich_message: JSON.stringify({ html }),
+    rich_message: rendered.rich_message,
     reply_markup: { inline_keyboard: rows },
-    blocks: [
-      { type: "section_heading", text: t("start.hub.title", {}, locale) },
-      { type: "paragraph", text: t("start.hub.body", {}, locale) },
-      {
-        type: "table",
-        is_compact: true,
-        rows: sections.map((s) => ({ cells: [{ text: s.label }, { text: s.hint }] })),
-      },
-      {
-        type: "buttons",
-        buttons: sections.map((s) => ({
-          text: s.label,
-          callback_data: s.callback,
-        })),
-      },
-      { type: "footer", text: t("start.hub.hint", {}, locale) },
-    ],
+    blocks: rendered.blocks,
   };
 }
+
 
 /** Async-operation status card (§21/§65 vocabulary). Edited in place as stages advance. */
 export type OpStage = "searching" | "found" | "preparing" | "downloading" | "uploading" | "ready" | "failed";

@@ -74,6 +74,73 @@ export function renderMovieDetail(sessionId: string, idx: number, it: SearchItem
   return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 
+import { RichMessageBuilder } from "../ui/components.js";
+
+export function renderMovieDetailRich(sessionId: string, idx: number, it: SearchItem, locale = "en"): Record<string, unknown> {
+  const rows: KbButton[][] = [];
+  if (it.downloadUrl) {
+    rows.push([{ text: t("movies.detail.download", {}, locale), callback_data: packCb("mdl", `${sessionId}:${idx}`, 1) }]);
+  }
+  if (it.pageUrl) {
+    rows.push([
+      { text: t("movies.detail.trailer", {}, locale), url: it.pageUrl },
+      { text: "💬 Subtitles", callback_data: packCb("msb", `${sessionId}:${idx}`, 1) },
+    ]);
+  }
+  rows.push([
+    { text: t("music.detail.save", {}, locale), callback_data: packCb("mf", `${sessionId}:${idx}`, 1) },
+    { text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) },
+  ]);
+
+  const specRows = [
+    [
+      { text: "Feature", is_header: true, align: "left" as const, valign: "middle" as const },
+      { text: "Information", is_header: true, align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Director", align: "left" as const, valign: "middle" as const },
+      { text: it.author ?? "Unknown", align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Category", align: "left" as const, valign: "middle" as const },
+      { text: it.category ?? "Cinema", align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Release Year", align: "left" as const, valign: "middle" as const },
+      { text: it.year ? String(it.year) : "Recent", align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Resolution", align: "left" as const, valign: "middle" as const },
+      { text: "4K UHD / 1080p Direct", align: "left" as const, valign: "middle" as const },
+    ],
+  ];
+
+  const builder = new RichMessageBuilder()
+    .heading(2, `🎬 ${it.title}${it.year ? ` (${it.year})` : ""}`)
+    .divider()
+    .table(specRows, { is_bordered: true, is_striped: true });
+
+  if (it.thumbnail) {
+    builder.photo(it.thumbnail, `${it.title} poster`);
+  }
+
+  if (it.description) {
+    builder.details("📖 Synopsis & Overview", [
+      {
+        type: "paragraph",
+        text: it.description,
+      },
+    ]);
+  }
+
+  const rendered = builder.build();
+  return {
+    rich_message: rendered.rich_message,
+    reply_markup: { inline_keyboard: rows },
+    blocks: rendered.blocks,
+  };
+}
+
 export function renderSubtitleOptions(
   sessionId: string,
   idx: number,

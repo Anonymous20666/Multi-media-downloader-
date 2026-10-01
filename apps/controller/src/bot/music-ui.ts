@@ -45,19 +45,110 @@ export function renderMusicDetail(sessionId: string, idx: number, it: SearchItem
   return { text: lines.join("\n"), reply_markup: { inline_keyboard: rows } };
 }
 
+import { RichMessageBuilder } from "../ui/components.js";
+
 export function renderMusicRich(query: string, sessionId: string, items: SearchItem[], locale = "en"): Record<string, unknown> {
-  return {
-    blocks: [
-      { type: "section_heading", text: t("music.results.title", { q: query }, locale) },
-      {
-        type: "list",
-        items: items.map((it) => ({ text: `${it.title}${it.author ? ` — ${it.author}` : ""}` })),
-      },
-      {
-        type: "buttons",
-        buttons: items.map((it, i) => ({ text: `${i + 1}. ${(it.title ?? "").slice(0, 24)}`, callback_data: packCb("ms", `${sessionId}:${i}`, 1) })),
-      },
+  const keyboard = items.map((it, i) => [{ text: `${i + 1}. ${(it.title ?? "").slice(0, 28)}`, callback_data: packCb("ms", `${sessionId}:${i}`, 1) }]);
+  keyboard.push([{ text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) }]);
+
+  const tableCells = [
+    [
+      { text: "#", is_header: true, align: "center" as const, valign: "middle" as const },
+      { text: "Track Title", is_header: true, align: "left" as const, valign: "middle" as const },
+      { text: "Artist", is_header: true, align: "left" as const, valign: "middle" as const },
+      { text: "Duration", is_header: true, align: "center" as const, valign: "middle" as const },
     ],
+    ...items.slice(0, 10).map((it, i) => [
+      { text: String(i + 1), align: "center" as const, valign: "middle" as const },
+      { text: (it.title ?? "").slice(0, 30), align: "left" as const, valign: "middle" as const },
+      { text: (it.author ?? "Unknown").slice(0, 20), align: "left" as const, valign: "middle" as const },
+      { text: fmtDuration(it.duration) || "—", align: "center" as const, valign: "middle" as const },
+    ]),
+  ];
+
+  const builder = new RichMessageBuilder()
+    .heading(2, `🎵 ${t("music.results.title", { q: query }, locale)}`)
+    .divider()
+    .table(tableCells, { is_bordered: true, is_striped: true })
+    .details("💡 Search Tips & Voice Gestures", [
+      {
+        type: "paragraph",
+        text: "Tap any numbered row below to stream or download instantly. You can also send voice notes or say 'Pappy play <song>'.",
+      },
+    ]);
+
+  const rendered = builder.build();
+  return {
+    rich_message: rendered.rich_message,
+    reply_markup: { inline_keyboard: keyboard },
+    blocks: rendered.blocks,
+  };
+}
+
+export function renderMusicDetailRich(
+  sessionId: string,
+  idx: number,
+  it: SearchItem,
+  locale = "en",
+  shareUrl?: string | null,
+): Record<string, unknown> {
+  const dur = fmtDuration(it.duration);
+  const rows: KbButton[][] = [
+    [
+      { text: t("music.detail.download", {}, locale), callback_data: packCb("md", `${sessionId}:${idx}`, 1) },
+      { text: t("music.detail.queue", {}, locale), callback_data: packCb("mq", `${sessionId}:${idx}`, 1) },
+    ],
+    [
+      { text: t("music.detail.save", {}, locale), callback_data: packCb("mf", `${sessionId}:${idx}`, 1) },
+      { text: t("common.cancel", {}, locale), callback_data: packCb("mx", sessionId, 1) },
+    ],
+  ];
+  if (shareUrl) rows.push([{ text: t("common.share", {}, locale), url: shareUrl }]);
+
+  const specRows = [
+    [
+      { text: "Property", is_header: true, align: "left" as const, valign: "middle" as const },
+      { text: "Details", is_header: true, align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Title", align: "left" as const, valign: "middle" as const },
+      { text: it.title ?? "Unknown", align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Artist", align: "left" as const, valign: "middle" as const },
+      { text: it.author ?? "Unknown", align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Duration", align: "left" as const, valign: "middle" as const },
+      { text: dur || "Variable", align: "left" as const, valign: "middle" as const },
+    ],
+    [
+      { text: "Quality", align: "left" as const, valign: "middle" as const },
+      { text: it.previewKind ? String(it.previewKind) : "Lossless / 320k", align: "left" as const, valign: "middle" as const },
+    ],
+  ];
+
+  const builder = new RichMessageBuilder()
+    .heading(2, `🎧 ${it.title}`)
+    .divider()
+    .table(specRows, { is_bordered: true, is_striped: true });
+
+  if (it.thumbnail) {
+    builder.photo(it.thumbnail, `${it.title} cover artwork`);
+  }
+
+  builder.details("🎙 Lyrics & Metadata Specs", [
+    {
+      type: "paragraph",
+      text: "Lossless stream tagged with ID3v2.4 / Vorbis Comment metadata. Direct group VC streaming available via queue.",
+    },
+  ]);
+
+  const rendered = builder.build();
+  return {
+    rich_message: rendered.rich_message,
+    reply_markup: { inline_keyboard: rows },
+    blocks: rendered.blocks,
   };
 }
 

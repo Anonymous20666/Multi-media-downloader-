@@ -40,6 +40,10 @@ Power path (local Bot API server, 2GB uploads):
 docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --build
 ```
 
+No VPS to babysit? **`docs/71-FLY.md`** — one-command Fly.io deploy
+(`./scripts/fly-deploy.sh <prefix> jnb`): controller + worker + private Redis,
+wired over Fly's private network.
+
 Without Docker (dev):
 
 ```bash

@@ -12,3 +12,5 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+# Rendered fly configs (prefix/region-specific; templates are committed)
+fly/*/fly.toml

@@ -1,0 +1,16 @@
+# Rendered by scripts/fly-deploy.sh (__PREFIX__/__REGION__ substituted).
+# Group-call DJ: no public ports, consumes the Redis bus over 6PN.
+# Crash-only like compose: bad/missing STREAM_* exits 5x then stays down (loud).
+app = "__PREFIX__-worker"
+primary_region = "__REGION__"
+
+[build]
+  dockerfile = "workers/stream-py/Dockerfile"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[[restart]]
+  policy = "on-failure"
+  retries = 5

@@ -24,3 +24,5 @@ jobs:
       - run: cp .env.example .env
       - run: docker compose build
       - run: TELEGRAM_API_ID=1 TELEGRAM_API_HASH=dummy docker compose -f docker-compose.yml -f docker-compose.local-api.yml config -q
+      # Fly templates must render to valid TOML with the keys fly needs.
+      - run: python3 -c "import tomllib,glob; [tomllib.loads(open(f).read().replace('__PREFIX__','t').replace('__REGION__','jnb')) for f in sorted(glob.glob('fly/*/fly.toml.template'))]; print('fly templates OK')"

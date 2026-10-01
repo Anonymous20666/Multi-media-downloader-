@@ -1,0 +1,20 @@
+# Rendered by scripts/fly-deploy.sh (__PREFIX__/__REGION__ substituted).
+# Private Redis (AOF on a 1 GB volume, auto-created on first deploy).
+# Single machine by design — one writer, no split-brain.
+app = "__PREFIX__-redis"
+primary_region = "__REGION__"
+
+[build]
+  dockerfile = "fly/redis/Dockerfile"
+
+[mounts]
+  source = "__PREFIX___redisdata"
+  destination = "/data"
+  initial_size = "1gb"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[[restart]]
+  policy = "always"

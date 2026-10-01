@@ -170,6 +170,9 @@ def dispatch_one(bus: object, engine: CallEngine, stream_id_of: dict[int, str], 
             evt("pong")
     except EngineError as e:
         evt("error", error={"code": e.code, "message": str(e)[:300]})
+    except Exception as e:
+        log("error", "unexpected dispatch failure", error=f"{type(e).__name__}: {e}")
+        evt("error", error={"code": "DISPATCH_FAILED", "message": str(e)[:300]})
 
 
 def main() -> int:

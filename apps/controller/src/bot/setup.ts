@@ -464,7 +464,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     await flows.stream.skip(ctx.chatId, ctx.from.id);
   });
 
-  bot.command("stop", async (ctx) => {
+  bot.command(["stop", "end", "leave", "vcleave"], async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
     recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
@@ -746,6 +746,13 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
             const chatTitle = (ctx.chat as { title?: string } | undefined)?.title ?? "Group";
             const rich = renderGroupMenuRich(chatTitle);
             await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "stop_stream") {
+            if (!(await flows.stream.isAdmin(chatId, userId))) {
+              await toast(t("stream.need_admin"), true);
+              break;
+            }
+            await flows.stream.stop(chatId, userId);
+            await toast("⏹ Stream stopped.");
           } else if (target === "stream") {
             if (!(await flows.stream.isAdmin(chatId, userId))) {
               await toast(t("stream.need_admin"), true);

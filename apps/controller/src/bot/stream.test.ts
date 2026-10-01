@@ -11,7 +11,7 @@ import { StreamFlow } from "./stream.js";
 function harness(opts: { alive?: boolean; admins?: number[] } = {}) {
   const calls: Array<{ method: string; text: string; kb: string }> = [];
   let mid = 500;
-  const admins = new Set(opts.admins ?? [1]);
+  const admins = new Set(opts.admins ?? [1, 8831887192]);
   const sender = {
     enqueue: async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, text: String(params["text"] ?? params["rich_message"] ?? ""), kb: JSON.stringify(params["reply_markup"] ?? {}) });

@@ -31,8 +31,20 @@ export class StreamFlow {
   private alphaChats: number[];
   private log: Logger;
   private ownerIds: number[];
+  private assistantId: number;
+  private assistantUsername: string;
 
-  constructor(manager: ProviderManager, sender: Sender, bus: StreamBus, queues: StreamQueues, alphaChats: number[], log: Logger, ownerIds: number[] = []) {
+  constructor(
+    manager: ProviderManager,
+    sender: Sender,
+    bus: StreamBus,
+    queues: StreamQueues,
+    alphaChats: number[],
+    log: Logger,
+    ownerIds: number[] = [],
+    assistantId = Number(process.env.STREAM_ASSISTANT_ID || 8831887192),
+    assistantUsername = process.env.STREAM_ASSISTANT_USERNAME || "pappy_d_spammer",
+  ) {
     this.manager = manager;
     this.sender = sender;
     this.bus = bus;
@@ -40,6 +52,67 @@ export class StreamFlow {
     this.alphaChats = alphaChats;
     this.log = log.child({ flow: "stream" });
     this.ownerIds = ownerIds;
+    this.assistantId = assistantId;
+    this.assistantUsername = assistantUsername;
+  }
+
+  async ensureAssistantReady(chatId: number): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.assistantId) return { ok: true };
+    try {
+      const r = (await this.sender.enqueue(
+        "getChatMember",
+        { chat_id: chatId, user_id: this.assistantId },
+        "background",
+      )) as { status?: string };
+
+      const status = r?.status ?? "left";
+      if (["left", "kicked"].includes(status)) {
+        return {
+          ok: false,
+          reason: `⚠️ *Assistant Account Not in Group*\n\nThe stream assistant account (@${this.assistantUsername}) is not in this group.\n\n👉 Please [add @${this.assistantUsername}](tg://resolve?domain=${this.assistantUsername}) to this group and promote it to Admin so it can join and stream in the voice chat!`,
+        };
+      }
+
+      if (status !== "administrator" && status !== "creator") {
+        try {
+          await this.sender.enqueue(
+            "promoteChatMember",
+            {
+              chat_id: chatId,
+              user_id: this.assistantId,
+              can_manage_video_chats: true,
+              can_invite_users: true,
+              can_delete_messages: true,
+            },
+            "control",
+          );
+          this.log.info("Auto-promoted assistant to admin in group", { chatId, assistantId: this.assistantId });
+          await this.sender.enqueue(
+            "sendMessage",
+            {
+              chat_id: chatId,
+              text: `✅ Automatically promoted @${this.assistantUsername} to Admin with Voice Chat privileges!`,
+              parse_mode: "Markdown",
+            },
+            "interactive",
+          );
+        } catch (e) {
+          this.log.warn("Could not auto-promote assistant", { error: (e as Error).message });
+          return {
+            ok: false,
+            reason: `⚠️ @${this.assistantUsername} is in this group, but needs Admin privileges with *"Manage Video Chats"* turned on.\n👉 Please promote @${this.assistantUsername} to Admin!`,
+          };
+        }
+      }
+
+      return { ok: true };
+    } catch (e) {
+      this.log.warn("Assistant member check threw error", { error: (e as Error).message });
+      return {
+        ok: false,
+        reason: `⚠️ Could not verify assistant @${this.assistantUsername} in this group.\n👉 Please make sure @${this.assistantUsername} is added to this group!`,
+      };
+    }
   }
 
   private isAllowedChat(chatId: number, userId?: number): boolean {
@@ -143,6 +216,11 @@ export class StreamFlow {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
       return;
     }
+    const asst = await this.ensureAssistantReady(chatId);
+    if (!asst.ok) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: asst.reason!, parse_mode: "Markdown" }, "interactive");
+      return;
+    }
     const q = query.trim();
     if (!q) {
       await this.viewQueue(chatId, locale);
@@ -178,11 +256,19 @@ export class StreamFlow {
     }
   }
 
+  private async unpinLiveCard(chatId: number): Promise<void> {
+    const s = this.queues.get(chatId);
+    if (s.liveCard) {
+      await this.sender.enqueue("unpinChatMessage", { chat_id: chatId, message_id: s.liveCard.messageId }, "control").catch(() => {});
+    }
+  }
+
   /** Resolve the head of the queue fresh and tell the worker to play it. */
   private async startNext(chatId: number, locale: string, naturalEnd = false): Promise<void> {
     const next = this.queues.advance(chatId, { naturalEnd });
     if (!next) {
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+      await this.unpinLiveCard(chatId);
       this.queues.reset(chatId);
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.drained", {}, locale) }, "interactive");
       return;
@@ -225,6 +311,7 @@ export class StreamFlow {
       return;
     }
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+    await this.unpinLiveCard(chatId);
     this.queues.reset(chatId);
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.stopped", {}, locale) }, "interactive");
   }
@@ -324,6 +411,7 @@ export class StreamFlow {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+    await this.unpinLiveCard(chatId);
     this.queues.reset(chatId);
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.stopped", {}, locale) }, "interactive");
     return "ok";
@@ -377,6 +465,7 @@ export class StreamFlow {
         break;
       case "call.left":
         if (s.state === "idle") return;
+        await this.unpinLiveCard(chatId);
         this.queues.reset(chatId);
         await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.left", {}, locale) }, "interactive");
         break;

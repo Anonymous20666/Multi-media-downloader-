@@ -34,7 +34,8 @@ export function renderGroupMenuRich(chatTitle: string, locale = "en"): GroupMenu
       { text: "🎞 Shorts & Reels", callback_data: packCb("gm", "shorts", 1) },
     ],
     [
-      { text: "📋 View Queue", callback_data: packCb("sqe", "1", 1) },
+      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1) },
+      { text: "⏹ Stop", callback_data: packCb("gm", "stop_stream", 1) },
       { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1) },
     ],
   ];

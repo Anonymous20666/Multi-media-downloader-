@@ -42,7 +42,8 @@ docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d --bui
 
 No VPS to babysit? **`docs/71-FLY.md`** — one-command Fly.io deploy
 (`./scripts/fly-deploy.sh <prefix> jnb`): controller + worker + private Redis,
-wired over Fly's private network.
+wired over Fly's private network. Prefer a plain Ubuntu box on Fly instead?
+**`docs/72-FLY-MACHINE-VPS.md`** — raw microVM + compose, same stack.
 
 Without Docker (dev):
 

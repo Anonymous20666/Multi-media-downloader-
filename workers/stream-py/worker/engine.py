@@ -184,8 +184,8 @@ class PyTgCallsEngine(CallEngine):
             if not call or getattr(call, "id", 0) == 0:
                 await self._app.invoke(CreateGroupCall(peer=peer, random_id=random.randint(10000, 99999999), title="Pappy Radio 📻"))
                 created = True
-                for _ in range(8):
-                    await asyncio.sleep(0.5)
+                for _ in range(10):
+                    await asyncio.sleep(0.25)
                     full2 = await self._app.invoke(GetFullChannel(channel=peer))
                     call2 = getattr(full2.full_chat, "call", None)
                     if call2 and getattr(call2, "id", 0) != 0:
@@ -195,8 +195,8 @@ class PyTgCallsEngine(CallEngine):
         try:
             is_new = bool(self._run_pyrogram(_check_or_create()))
             if is_new:
-                # Give Telegram WebRTC servers 2.0s to provision media relay transport endpoints
-                time.sleep(2.0)
+                # Give Telegram WebRTC servers 1.0s to provision media relay transport endpoints
+                time.sleep(1.0)
             return is_new
         except Exception as e:
             err_msg = str(e)

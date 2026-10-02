@@ -26,43 +26,60 @@ function formatDuration(sec?: number): string {
 
 /** Stage Progress Cards for sub-second, lively feedback before live deck. */
 export function renderStreamConnectingRich(
-  stage: 1 | 2,
+  stage: 1 | 2 | 3,
   queryOrTitle: string,
   extra?: { performer?: string; duration?: number; vibe?: string; version?: number },
   locale = "en",
 ): Record<string, unknown> {
   const isStage1 = stage === 1;
+  const isStage2 = stage === 2;
   const startingText = t("stream.live.starting", {}, locale);
-  const head = isStage1 ? `⚡ [1/3] 🔍 ${startingText}` : `📡 [2/3] 🚀 ${startingText}`;
+  const head =
+    stage === 1
+      ? `⚡ [1/3] 🔍 ${startingText}`
+      : stage === 2
+        ? `📡 [2/3] 🚀 ${startingText}`
+        : `⚡ [3/3] 📻 WebRTC Relay Connected`;
   const targetLabel = extra?.performer ? `${queryOrTitle} — ${extra.performer}` : queryOrTitle;
   const v = `v${extra?.version ?? 1}`;
 
-  const builder = new RichMessageBuilder()
-    .heading(2, head)
-    .divider()
-    .paragraph(
-      isStage1
-        ? `${startingText} Resolving pristine 320kbps stream source for: **${targetLabel}**`
-        : `Handshaking WebRTC audio pipeline and connecting assistant to group call...`,
-    )
-    .table(
-      isStage1
+  const paragraphText =
+    stage === 1
+      ? `${startingText} Resolving pristine 320kbps stream source for: **${targetLabel}**`
+      : stage === 2
+        ? `Handshaking WebRTC audio pipeline and connecting assistant to group call...`
+        : `WebRTC audio pipeline joined! Buffering 48kHz Opus stream & loading Live Deck...`;
+
+  const tableData =
+    stage === 1
+      ? [
+          [{ text: "Pipeline", is_header: true }, { text: "Status", is_header: true }],
+          [{ text: "Track Query" }, { text: queryOrTitle }],
+          [{ text: "Codec" }, { text: "Opus 48kHz / 320kbps Lossless" }],
+          [{ text: "CDN Gateway" }, { text: "⚡ Fast-path Direct Stream" }],
+          [{ text: "Engine" }, { text: "PyTgCalls 2.3.3 + NTgCalls 2.2.5" }],
+        ]
+      : stage === 2
         ? [
-            [{ text: "Pipeline", is_header: true }, { text: "Status", is_header: true }],
-            [{ text: "Track Query" }, { text: queryOrTitle }],
-            [{ text: "Codec" }, { text: "Opus 48kHz / 320kbps Lossless" }],
-            [{ text: "CDN Gateway" }, { text: "⚡ Fast-path Direct Stream" }],
-            [{ text: "Engine" }, { text: "PyTgCalls 2.3.3 + NTgCalls 2.2.5" }],
-          ]
-        : [
             [{ text: "WebRTC Gateway", is_header: true }, { text: "Status", is_header: true }],
             [{ text: "Now Playing" }, { text: targetLabel }],
             [{ text: "Assistant" }, { text: "Connecting (@pappy_d_spammer)" }],
             [{ text: "Radio Vibe" }, { text: extra?.vibe || "Direct Stream" }],
             [{ text: "Latency" }, { text: "⚡ 14ms · Buffer Ready" }],
-          ],
-      { is_bordered: true, is_striped: true },
-    )
+          ]
+        : [
+            [{ text: "Pipeline", is_header: true }, { text: "Live State", is_header: true }],
+            [{ text: "Now Playing" }, { text: targetLabel }],
+            [{ text: "Assistant" }, { text: "🟢 Connected (@pappy_d_spammer)" }],
+            [{ text: "Audio Stream" }, { text: "⚡ 48kHz Stereo · Active" }],
+            [{ text: "VC Status" }, { text: "🟢 Transmitting Audio" }],
+          ];
+
+  const builder = new RichMessageBuilder()
+    .heading(2, head)
+    .divider()
+    .paragraph(paragraphText)
+    .table(tableData, { is_bordered: true, is_striped: true })
     .pullquote("PAPPY Media · Sub-second Voice Chat Radio");
 
   const transport: KbButton[] = [

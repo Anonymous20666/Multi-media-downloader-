@@ -339,7 +339,7 @@ export class StreamFlow {
   /** Send instant (< 150ms) stage progress card for lively visual feedback. */
   private async sendProgressStage(
     chatId: number,
-    stage: 1 | 2,
+    stage: 1 | 2 | 3,
     text: string,
     extra?: { performer?: string; duration?: number; vibe?: string },
     locale = "en",
@@ -799,26 +799,32 @@ export class StreamFlow {
     await this.sendProgressStage(chatId, 1, vibe, { vibe });
 
     this.queues.setSession(chatId, vibe, durationMinutes);
-    await this.replenishSessionTracks(chatId, vibe);
+
+    // Eagerly resolve the head track for this vibe directly:
+    const headTrack = await resolveFullTrack(vibe, isVideo);
+    if (headTrack?.url) {
+      this.queues.enqueue(chatId, {
+        title: headTrack.title,
+        performer: headTrack.author,
+        pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(vibe)}`,
+        mediaUrl: headTrack.url,
+        duration: headTrack.duration,
+        addedBy: userId,
+        isVideo,
+      });
+    }
 
     const s = this.queues.get(chatId);
     if (s.queue.length === 0) {
-      const full = await resolveFullTrack(vibe, isVideo);
-      if (full?.url) {
-        this.queues.enqueue(chatId, {
-          title: full.title,
-          performer: full.author,
-          pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(vibe)}`,
-          mediaUrl: full.url,
-          duration: full.duration,
-          addedBy: userId,
-          isVideo,
-        });
-      }
+      await this.replenishSessionTracks(chatId, vibe);
     }
 
     await this.startNext(chatId, locale);
-    this.preResolveQueue(chatId).catch(() => {});
+
+    // Replenish remaining tracks completely in the background:
+    this.replenishSessionTracks(chatId, vibe)
+      .then(() => this.preResolveQueue(chatId))
+      .catch(() => {});
   }
 
   getVolume(chatId: number): number {
@@ -1043,6 +1049,11 @@ export class StreamFlow {
     switch (evt.name) {
       case "call.joined":
         this.queues.setState(chatId, "live");
+        await this.sendProgressStage(chatId, 3, s.current?.title || s.sessionVibe || "Live Radio", {
+          performer: s.current?.performer,
+          duration: s.current?.duration ?? undefined,
+          vibe: s.sessionVibe,
+        });
         break;
       case "track.started":
         this.queues.setState(chatId, "live");

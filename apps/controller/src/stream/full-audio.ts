@@ -30,8 +30,10 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
   const target = isUrl ? queryOrUrl : `ytsearch1:${queryOrUrl}`;
   const args = [
     "--no-playlist",
+    "--playlist-items", "1",
     "--no-warnings",
     "--skip-download",
+    "--no-check-certificates",
     "--socket-timeout", "6",
     "--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(url)s",
   ];

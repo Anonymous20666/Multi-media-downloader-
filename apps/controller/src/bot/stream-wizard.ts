@@ -3,10 +3,11 @@
  * Guides group admins through choosing medium (music/video),
  * duration (minutes/hours/custom), vibe/artist, and connects
  * the assistant to the voice/video call with auto-pinning.
+ * Built with Bot API 10.3 Native Rich Blocks and Styled Pill Buttons.
  */
 
 import { RichMessageBuilder } from "../ui/rich-components.js";
-import { packCb, type FallbackMessage, type KbButton } from "../ui/components.js";
+import { packCb, type KbButton } from "../ui/components.js";
 
 export type WizardStep =
   | "mode"
@@ -109,10 +110,10 @@ export function renderWizardMode(sid: string): { rich_message: string; reply_mar
 
   const rows: KbButton[][] = [
     [
-      { text: "🎵 Music Audio", callback_data: packCb("swm", `${sid}:music`, 1) },
-      { text: "🎬 Video / Cinema", callback_data: packCb("swm", `${sid}:video`, 1) },
+      { text: "🎵 Music Audio", callback_data: packCb("swm", `${sid}:music`, 1), style: "primary" },
+      { text: "🎬 Video / Cinema", callback_data: packCb("swm", `${sid}:video`, 1), style: "primary" },
     ],
-    [{ text: "✕ Cancel", callback_data: packCb("swx", sid, 1) }],
+    [{ text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" }],
   ];
 
   return {
@@ -147,12 +148,12 @@ export function renderWizardDurationType(sid: string): { rich_message: string; r
 
   const rows: KbButton[][] = [
     [
-      { text: "⏱ In Minutes", callback_data: packCb("swd", `${sid}:min`, 1) },
-      { text: "⏳ In Hours", callback_data: packCb("swd", `${sid}:hr`, 1) },
+      { text: "⏱ In Minutes", callback_data: packCb("swd", `${sid}:min`, 1), style: "primary" },
+      { text: "⏳ In Hours", callback_data: packCb("swd", `${sid}:hr`, 1), style: "primary" },
     ],
     [
-      { text: "◀ Back", callback_data: packCb("swb", sid, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back", callback_data: packCb("swb", sid, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -171,18 +172,18 @@ export function renderWizardMinutes(sid: string): { rich_message: string; reply_
 
   const rows: KbButton[][] = [
     [
-      { text: "15 min", callback_data: packCb("swv", `${sid}:15m`, 1) },
-      { text: "30 min", callback_data: packCb("swv", `${sid}:30m`, 1) },
-      { text: "45 min", callback_data: packCb("swv", `${sid}:45m`, 1) },
+      { text: "15 min", callback_data: packCb("swv", `${sid}:15m`, 1), style: "primary" },
+      { text: "30 min", callback_data: packCb("swv", `${sid}:30m`, 1), style: "primary" },
+      { text: "45 min", callback_data: packCb("swv", `${sid}:45m`, 1), style: "primary" },
     ],
     [
-      { text: "60 min", callback_data: packCb("swv", `${sid}:60m`, 1) },
-      { text: "90 min", callback_data: packCb("swv", `${sid}:90m`, 1) },
-      { text: "120 min", callback_data: packCb("swv", `${sid}:120m`, 1) },
+      { text: "60 min", callback_data: packCb("swv", `${sid}:60m`, 1), style: "primary" },
+      { text: "90 min", callback_data: packCb("swv", `${sid}:90m`, 1), style: "primary" },
+      { text: "120 min", callback_data: packCb("swv", `${sid}:120m`, 1), style: "primary" },
     ],
     [
-      { text: "◀ Back", callback_data: packCb("swdb", sid, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back", callback_data: packCb("swdb", sid, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -201,21 +202,21 @@ export function renderWizardHours(sid: string): { rich_message: string; reply_ma
 
   const rows: KbButton[][] = [
     [
-      { text: "1 hr", callback_data: packCb("swv", `${sid}:1h`, 1) },
-      { text: "2 hrs", callback_data: packCb("swv", `${sid}:2h`, 1) },
-      { text: "4 hrs", callback_data: packCb("swv", `${sid}:4h`, 1) },
+      { text: "1 hr", callback_data: packCb("swv", `${sid}:1h`, 1), style: "primary" },
+      { text: "2 hrs", callback_data: packCb("swv", `${sid}:2h`, 1), style: "primary" },
+      { text: "4 hrs", callback_data: packCb("swv", `${sid}:4h`, 1), style: "primary" },
     ],
     [
-      { text: "8 hrs", callback_data: packCb("swv", `${sid}:8h`, 1) },
-      { text: "12 hrs", callback_data: packCb("swv", `${sid}:12h`, 1) },
-      { text: "24 hrs", callback_data: packCb("swv", `${sid}:24h`, 1) },
+      { text: "8 hrs", callback_data: packCb("swv", `${sid}:8h`, 1), style: "primary" },
+      { text: "12 hrs", callback_data: packCb("swv", `${sid}:12h`, 1), style: "primary" },
+      { text: "24 hrs", callback_data: packCb("swv", `${sid}:24h`, 1), style: "primary" },
     ],
     [
-      { text: "✍️ Custom Hours (e.g. 30h)", callback_data: packCb("swc", sid, 1) },
+      { text: "✍️ Custom Hours (e.g. 30h)", callback_data: packCb("swc", sid, 1), style: "default" },
     ],
     [
-      { text: "◀ Back", callback_data: packCb("swdb", sid, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back", callback_data: packCb("swdb", sid, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -235,8 +236,8 @@ export function renderWizardCustomHoursPrompt(sid: string): { rich_message: stri
 
   const rows: KbButton[][] = [
     [
-      { text: "◀ Back to Hours", callback_data: packCb("swd", `${sid}:hr`, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back to Hours", callback_data: packCb("swd", `${sid}:hr`, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -268,23 +269,23 @@ export function renderWizardVibe(sid: string, durationLabel: string): { rich_mes
 
   const rows: KbButton[][] = [
     [
-      { text: "🌴 Afrobeats", callback_data: packCb("swq", `${sid}:Afrobeats`, 1) },
-      { text: "⚡ Trap / Rap", callback_data: packCb("swq", `${sid}:Trap`, 1) },
+      { text: "🌴 Afrobeats", callback_data: packCb("swq", `${sid}:Afrobeats`, 1), style: "primary" },
+      { text: "⚡ Trap / Rap", callback_data: packCb("swq", `${sid}:Trap`, 1), style: "primary" },
     ],
     [
-      { text: "🧃 Juice WRLD", callback_data: packCb("swq", `${sid}:Juice_WRLD`, 1) },
-      { text: "💫 Global Pop", callback_data: packCb("swq", `${sid}:Pop`, 1) },
+      { text: "🧃 Juice WRLD", callback_data: packCb("swq", `${sid}:Juice_WRLD`, 1), style: "primary" },
+      { text: "💫 Global Pop", callback_data: packCb("swq", `${sid}:Pop`, 1), style: "primary" },
     ],
     [
-      { text: "💔 Sad / Chill", callback_data: packCb("swq", `${sid}:Sad_Chill`, 1) },
-      { text: "🔥 Hip-Hop 2026", callback_data: packCb("swq", `${sid}:Hip_Hop`, 1) },
+      { text: "💔 Sad / Chill", callback_data: packCb("swq", `${sid}:Sad_Chill`, 1), style: "primary" },
+      { text: "🔥 Hip-Hop 2026", callback_data: packCb("swq", `${sid}:Hip_Hop`, 1), style: "primary" },
     ],
     [
-      { text: "🔍 Custom Artist / Song", callback_data: packCb("swcv", sid, 1) },
+      { text: "🔍 Custom Artist / Song", callback_data: packCb("swcv", sid, 1), style: "default" },
     ],
     [
-      { text: "◀ Back", callback_data: packCb("swvb", sid, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back", callback_data: packCb("swvb", sid, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -304,8 +305,8 @@ export function renderWizardCustomVibePrompt(sid: string): { rich_message: strin
 
   const rows: KbButton[][] = [
     [
-      { text: "◀ Back to Vibes", callback_data: packCb("swvb", sid, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back to Vibes", callback_data: packCb("swvb", sid, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -336,19 +337,19 @@ export function renderWizardMovieCategories(sid: string): { rich_message: string
 
   const rows: KbButton[][] = [
     [
-      { text: "🍥 Anime", callback_data: packCb("swmc", `${sid}:Anime`, 1) },
-      { text: "💥 Action", callback_data: packCb("swmc", `${sid}:Action`, 1) },
+      { text: "🍥 Anime", callback_data: packCb("swmc", `${sid}:Anime`, 1), style: "primary" },
+      { text: "💥 Action", callback_data: packCb("swmc", `${sid}:Action`, 1), style: "primary" },
     ],
     [
-      { text: "🍿 Trending Films", callback_data: packCb("swmc", `${sid}:Trending`, 1) },
-      { text: "🎲 Random Film", callback_data: packCb("swmc", `${sid}:Random`, 1) },
+      { text: "🍿 Trending Films", callback_data: packCb("swmc", `${sid}:Trending`, 1), style: "primary" },
+      { text: "🎲 Random Film", callback_data: packCb("swmc", `${sid}:Random`, 1), style: "primary" },
     ],
     [
-      { text: "🔍 Search Title", callback_data: packCb("swcm", sid, 1) },
+      { text: "🔍 Search Title", callback_data: packCb("swcm", sid, 1), style: "default" },
     ],
     [
-      { text: "◀ Back", callback_data: packCb("swb", sid, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back", callback_data: packCb("swb", sid, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 
@@ -368,8 +369,8 @@ export function renderWizardCustomMoviePrompt(sid: string): { rich_message: stri
 
   const rows: KbButton[][] = [
     [
-      { text: "◀ Back to Categories", callback_data: packCb("swm", `${sid}:video`, 1) },
-      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1) },
+      { text: "◀ Back to Categories", callback_data: packCb("swm", `${sid}:video`, 1), style: "default" },
+      { text: "✕ Cancel", callback_data: packCb("swx", sid, 1), style: "danger" },
     ],
   ];
 

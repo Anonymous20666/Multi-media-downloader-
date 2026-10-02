@@ -172,7 +172,12 @@ class PyTgCallsEngine(CallEngine):
             if "TransportParseException" in err_name or "Transport not found" in err_msg or "Timeout" in err_name or "ConnectionNotFound" in err_name:
                 try:
                     import time
-                    time.sleep(1.5)
+                    try:
+                        if hasattr(self._call, "_clear_cache"):
+                            self._call._clear_cache(chat_id)
+                    except Exception:
+                        pass
+                    time.sleep(1.0)
                     self._call.play(chat_id, stream, config=config)
                 except Exception as retry_e:
                     raise EngineError("PLAY_FAILED", f"{type(retry_e).__name__}: {retry_e}") from retry_e
@@ -203,7 +208,11 @@ class PyTgCallsEngine(CallEngine):
         try:
             self._call.leave_call(chat_id)
         except Exception:
-            pass
+            try:
+                if hasattr(self._call, "_clear_cache"):
+                    self._call._clear_cache(chat_id)
+            except Exception:
+                pass
         finally:
             self._live.discard(chat_id)
 

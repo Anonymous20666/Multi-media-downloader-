@@ -27,23 +27,27 @@ export function renderGroupMenuRich(chatTitle: string, locale = "en"): GroupMenu
   const rows: KbButton[][] = [
     [
       { text: "🎵 Music", callback_data: packCb("gm", "play", 1), style: "primary" },
-      { text: "📡 Stream in VC", callback_data: packCb("gm", "stream", 1), style: "primary" },
+      { text: "📡 Stream in VC", callback_data: packCb("gm", "stream", 1), style: "success" },
     ],
     [
       { text: "🎬 Cinema", callback_data: packCb("gm", "movies", 1), style: "primary" },
       { text: "🎞 Shorts", callback_data: packCb("gm", "shorts", 1), style: "primary" },
     ],
     [
-      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1), style: "primary" },
-      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1), style: "primary" },
+      { text: "▶ Resume", callback_data: packCb("sr", "v0", 1), style: "success" },
+      { text: "⏸ Pause", callback_data: packCb("sp", "v0", 1), style: "primary" },
+    ],
+    [
+      { text: "⏭ Next Track", callback_data: packCb("ss", "v0", 1), style: "primary" },
+      { text: "⏹ Stop Stream", callback_data: packCb("sx", "v0", 1), style: "danger" },
     ],
     [
       { text: "🔉 Vol -10%", callback_data: packCb("svd", "v0", 1), style: "default" },
       { text: "🔊 Vol +10%", callback_data: packCb("svu", "v0", 1), style: "default" },
     ],
     [
-      { text: "⏹ Stop", callback_data: packCb("gm", "stop_stream", 1), style: "danger" },
-      { text: "🔄 Refresh", callback_data: packCb("gm", "refresh", 1), style: "default" },
+      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1), style: "default" },
+      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1), style: "default" },
     ],
   ];
 

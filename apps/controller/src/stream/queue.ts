@@ -141,9 +141,27 @@ export class StreamQueues {
     s.version++;
   }
 
+  enqueueMany(chatId: number, tracks: QueuedTrack[]): number {
+    const s = this.get(chatId);
+    let added = 0;
+    for (const t of tracks) {
+      if (s.queue.length >= MAX_QUEUE) break;
+      s.queue.push(t);
+      added++;
+    }
+    if (added > 0) s.version++;
+    return added;
+  }
+
   isSessionActive(chatId: number): boolean {
     const s = this.get(chatId);
     return typeof s.sessionEndTime === "number" && Date.now() < s.sessionEndTime;
+  }
+
+  getSessionRemainingMinutes(chatId: number): number {
+    const s = this.get(chatId);
+    if (!s.sessionEndTime) return 0;
+    return Math.max(0, Math.ceil((s.sessionEndTime - Date.now()) / 60_000));
   }
 
   reset(chatId: number): void {

@@ -2,7 +2,7 @@
  * StreamFlow: group-call DJ controls (V1.5 alpha). The controller owns the
  * QUEUE + UX; the Python worker only plays URLs it's told (contract v1).
  * Gates: group-only → alpha-flagged → admin (control) → worker alive.
- * Media URLs are resolved FRESH at each track start (signed URLs expire).
+ * Media URLs are resolved FRESH with authenticated extraction and cached in-memory.
  */
 import type { ProviderManager } from "@pappy/media-manifest";
 import type { Logger } from "../logger.js";
@@ -11,7 +11,7 @@ import { Sender } from "../telegram/sender.js";
 import { buildCmd, type StreamEvt, type StreamTrack } from "../stream/contract.js";
 import { StreamQueues, type QueuedTrack } from "../stream/queue.js";
 import type { StreamBus } from "../stream/bus.js";
-import { renderLiveCard, renderLiveCardRich, renderQueue } from "./stream-ui.js";
+import { renderLiveCard, renderLiveCardRich, renderQueue, renderStreamConnectingRich } from "./stream-ui.js";
 import { resolveFullTrack } from "../stream/full-audio.js";
 
 const ADMINS = new Set(["creator", "administrator"]);
@@ -34,6 +34,7 @@ export class StreamFlow {
   private ownerIds: number[];
   private assistantId: number;
   private assistantUsername: string;
+  private watchdogTimer?: NodeJS.Timeout;
 
   constructor(
     manager: ProviderManager,
@@ -55,6 +56,46 @@ export class StreamFlow {
     this.ownerIds = ownerIds;
     this.assistantId = assistantId;
     this.assistantUsername = assistantUsername;
+
+    this.startWatchdog();
+  }
+
+  private startWatchdog(): void {
+    if (this.watchdogTimer) return;
+    this.watchdogTimer = setInterval(() => {
+      this.checkSessionTimers().catch(() => {});
+    }, 15_000);
+    this.watchdogTimer.unref();
+  }
+
+  stopWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = undefined;
+    }
+  }
+
+  private async checkSessionTimers(): Promise<void> {
+    for (const chatId of this.alphaChats) {
+      if (!chatId) continue;
+      const s = this.queues.get(chatId);
+      if (s.state !== "idle" && s.sessionEndTime && Date.now() >= s.sessionEndTime) {
+        this.log.info("Session time elapsed — concluding call", { chatId });
+        await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+        await this.unpinLiveCard(chatId);
+        const mins = s.sessionDurationMinutes ?? 15;
+        this.queues.reset(chatId);
+        await this.sender.enqueue(
+          "sendMessage",
+          {
+            chat_id: chatId,
+            text: `📻 *Session Complete*\n\nYour ${mins}-minute stream session has concluded.\nVoice chat call left. Assistant @${this.assistantUsername} remains in the group ready for next stream!`,
+            parse_mode: "Markdown",
+          },
+          "interactive",
+        );
+      }
+    }
   }
 
   async ensureAssistantReady(chatId: number): Promise<{ ok: boolean; reason?: string }> {
@@ -148,6 +189,9 @@ export class StreamFlow {
         version: s.version,
         loopMode: s.loopMode,
         volume: s.volume,
+        sessionRemainingMinutes: this.queues.getSessionRemainingMinutes(chatId),
+        sessionVibe: s.sessionVibe,
+        duration: s.current?.duration ?? undefined,
       },
       locale,
     );
@@ -168,6 +212,9 @@ export class StreamFlow {
         version: s.version,
         loopMode: s.loopMode,
         volume: s.volume,
+        sessionRemainingMinutes: this.queues.getSessionRemainingMinutes(chatId),
+        sessionVibe: s.sessionVibe,
+        duration: s.current?.duration ?? undefined,
       };
       const rich = renderLiveCardRich(cardData, locale);
       const fb = this.card(chatId, locale);
@@ -211,6 +258,67 @@ export class StreamFlow {
     }
   }
 
+  /** Send instant (< 150ms) stage progress card for lively visual feedback. */
+  private async sendProgressStage(
+    chatId: number,
+    stage: 1 | 2,
+    text: string,
+    extra?: { performer?: string; duration?: number; vibe?: string },
+    locale = "en",
+  ): Promise<void> {
+    const s = this.queues.get(chatId);
+    const rich = renderStreamConnectingRich(stage, text, { ...extra, version: s.version }, locale);
+    if (s.liveCard) {
+      try {
+        await this.sender.enqueue(
+          "editMessageText",
+          { chat_id: chatId, message_id: s.liveCard.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+          "interactive",
+        );
+        return;
+      } catch {}
+    }
+    const id = await msgId(
+      this.sender
+        .enqueue("sendRichMessage", { chat_id: chatId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive")
+        .catch(() =>
+          this.sender.enqueue("sendMessage", { chat_id: chatId, text: `⚡ [${stage}/3] ${text}...`, parse_mode: "Markdown", reply_markup: rich.reply_markup }, "interactive"),
+        ),
+    );
+    this.queues.setLiveCard(chatId, { chatId, messageId: id });
+    await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
+  }
+
+  /** Background pre-resolution of upcoming queue tracks to guarantee 0-latency gapless playback. */
+  async preResolveQueue(chatId: number): Promise<void> {
+    const s = this.queues.get(chatId);
+    if (!s.queue.length) return;
+
+    // Check if queue needs auto-replenishment during session
+    if (this.queues.isSessionActive(chatId) && s.queue.length <= 2 && s.sessionVibe) {
+      this.replenishSessionTracks(chatId, s.sessionVibe).catch(() => {});
+    }
+
+    for (let i = 0; i < Math.min(s.queue.length, 2); i++) {
+      const item = s.queue[i];
+      if (!item) continue;
+      const isClip30s = item.mediaUrl && /AudioPreview|mzaf_|itunes\.apple\.com/i.test(item.mediaUrl);
+      if (!item.mediaUrl || isClip30s) {
+        try {
+          const queryTerm = `${item.title} ${item.performer || ""}`.trim();
+          const full = await resolveFullTrack(queryTerm, item.isVideo);
+          if (full?.url) {
+            item.mediaUrl = full.url;
+            if (full.duration) item.duration = full.duration;
+            this.log.info("Pre-resolved queue track in background", { chatId, title: item.title });
+          }
+        } catch (e) {
+          this.log.warn("Background pre-resolve failed", { error: (e as Error).message });
+        }
+      }
+    }
+  }
+
   /** /play <query> — group admins only. */
   async play(chatId: number, userId: number, query: string, chatType: string, locale = "en", isVideo = false): Promise<void> {
     if (chatType !== "group" && chatType !== "supergroup") {
@@ -239,6 +347,9 @@ export class StreamFlow {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.offline", {}, locale) }, "interactive");
       return;
     }
+
+    // Instant lively acknowledgement (< 150ms)
+    await this.sendProgressStage(chatId, 1, q);
 
     const isUrl = /^https?:\/\//i.test(q);
     let track: QueuedTrack | null = null;
@@ -334,6 +445,7 @@ export class StreamFlow {
     } else {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.queued", { p: res.position, t: track.title }, locale) }, "interactive");
       await this.showCard(chatId, locale);
+      this.preResolveQueue(chatId).catch(() => {});
     }
   }
 
@@ -359,12 +471,16 @@ export class StreamFlow {
       const term = searchTerms[Math.floor(Math.random() * searchTerms.length)] ?? vibe;
       const res = await this.manager.searchMusic(term, 10);
       const s = this.queues.get(chatId);
+      const newTracks: QueuedTrack[] = [];
+
       for (const item of res.items) {
         if (!item.title) continue;
-        const exists = s.queue.some((q) => q.title.toLowerCase() === item.title.toLowerCase()) ||
-          (s.current?.title.toLowerCase() === item.title.toLowerCase());
+        const exists =
+          s.queue.some((q) => q.title.toLowerCase() === item.title.toLowerCase()) ||
+          (s.current?.title.toLowerCase() === item.title.toLowerCase()) ||
+          newTracks.some((q) => q.title.toLowerCase() === item.title.toLowerCase());
         if (!exists) {
-          this.queues.enqueue(chatId, {
+          newTracks.push({
             title: item.title,
             performer: item.author ?? undefined,
             pageUrl: item.pageUrl ?? item.previewUrl ?? "",
@@ -373,6 +489,11 @@ export class StreamFlow {
             isVideo: false,
           });
         }
+      }
+
+      if (newTracks.length > 0) {
+        this.queues.enqueueMany(chatId, newTracks);
+        this.log.info("Replenished session tracks batch", { chatId, count: newTracks.length });
       }
     } catch (e) {
       this.log.warn("session auto-replenish failed", { error: (e as Error).message });
@@ -383,27 +504,69 @@ export class StreamFlow {
   private async startNext(chatId: number, locale: string, naturalEnd = false): Promise<void> {
     const s = this.queues.get(chatId);
 
+    // Check if session has naturally expired:
+    if (s.sessionEndTime && Date.now() >= s.sessionEndTime) {
+      await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+      await this.unpinLiveCard(chatId);
+      const mins = s.sessionDurationMinutes ?? 15;
+      this.queues.reset(chatId);
+      await this.sender.enqueue(
+        "sendMessage",
+        {
+          chat_id: chatId,
+          text: `📻 *Session Complete*\n\nYour ${mins}-minute stream session has concluded.\nVoice chat call left. Assistant @${this.assistantUsername} remains in the group ready for next stream!`,
+          parse_mode: "Markdown",
+        },
+        "interactive",
+      );
+      return;
+    }
+
     // Auto-replenish if session is active and queue is running low:
-    if (this.queues.isSessionActive(chatId) && s.queue.length <= 1 && s.sessionVibe) {
+    if (this.queues.isSessionActive(chatId) && s.queue.length <= 2 && s.sessionVibe) {
       await this.replenishSessionTracks(chatId, s.sessionVibe).catch(() => {});
     }
 
     const next = this.queues.advance(chatId, { naturalEnd });
     if (!next) {
-      // If session is still active, try one more replenishment before giving up:
+      // If session is active, replenish and retry — DO NOT stop the call!
       if (this.queues.isSessionActive(chatId) && s.sessionVibe) {
         await this.replenishSessionTracks(chatId, s.sessionVibe).catch(() => {});
         const retryNext = this.queues.advance(chatId, { naturalEnd });
         if (retryNext) {
           return this.playTrackItem(chatId, retryNext, locale);
         }
+        // Still empty — try resolving direct vibe query
+        const full = await resolveFullTrack(s.sessionVibe, false);
+        if (full?.url) {
+          const directTrack: QueuedTrack = {
+            title: full.title,
+            performer: full.author,
+            pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(s.sessionVibe)}`,
+            mediaUrl: full.url,
+            duration: full.duration,
+            addedBy: 0,
+            isVideo: false,
+          };
+          s.current = directTrack;
+          return this.playTrackItem(chatId, directTrack, locale);
+        }
       }
+
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
       await this.unpinLiveCard(chatId);
       this.queues.reset(chatId);
-      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.drained", {}, locale) }, "interactive");
+      await this.sender.enqueue(
+        "sendMessage",
+        {
+          chat_id: chatId,
+          text: `📻 All queued tracks finished. Assistant @${this.assistantUsername} left the voice call and remains in group!`,
+        },
+        "interactive",
+      );
       return;
     }
+
     await this.playTrackItem(chatId, next, locale);
   }
 
@@ -417,7 +580,6 @@ export class StreamFlow {
         if (next.isVideo) {
           mediaUrl = manifest.media.find((x) => x.type === "video" || x.hasVideo)?.url ?? null;
         } else {
-          // Strictly audio! NEVER fall back to image URL!
           mediaUrl = manifest.media.find((x) => x.type === "audio" || x.hasAudio)?.url ?? null;
         }
         if (manifest.duration) duration = manifest.duration;
@@ -436,15 +598,33 @@ export class StreamFlow {
         }
       }
     }
+
     if (!mediaUrl) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_source", {}, locale) }, "interactive");
-      await this.startNext(chatId, locale, false); // skip the dud, keep the party going
+      await this.startNext(chatId, locale, false); // skip dud, keep stream alive
       return;
     }
-    const track: StreamTrack = { title: next.title, performer: next.performer ?? null, url: mediaUrl, duration: duration ?? next.duration ?? null, isVideo: next.isVideo };
+
+    // Stage 2: Connecting to voice chat
+    await this.sendProgressStage(chatId, 2, next.title, {
+      performer: next.performer,
+      duration: duration ?? next.duration ?? undefined,
+      vibe: this.queues.get(chatId).sessionVibe,
+    });
+
+    const track: StreamTrack = {
+      title: next.title,
+      performer: next.performer ?? null,
+      url: mediaUrl,
+      duration: duration ?? next.duration ?? null,
+      isVideo: next.isVideo,
+    };
+
     this.queues.setState(chatId, "starting");
-    await this.showCard(chatId, locale);
     await this.bus.publish(buildCmd("stream.play", chatId, { track }));
+
+    // Start background pre-resolving for subsequent tracks
+    this.preResolveQueue(chatId).catch(() => {});
   }
 
   /** Start a continuous radio session for the selected duration (in minutes). */
@@ -476,6 +656,9 @@ export class StreamFlow {
       return;
     }
 
+    // Stage 1 feedback immediately
+    await this.sendProgressStage(chatId, 1, vibe, { vibe });
+
     this.queues.setSession(chatId, vibe, durationMinutes);
     await this.replenishSessionTracks(chatId, vibe);
 
@@ -495,11 +678,8 @@ export class StreamFlow {
       }
     }
 
-    if (s.state === "idle") {
-      await this.startNext(chatId, locale);
-    } else {
-      await this.showCard(chatId, locale);
-    }
+    await this.startNext(chatId, locale);
+    this.preResolveQueue(chatId).catch(() => {});
   }
 
   getVolume(chatId: number): number {
@@ -524,7 +704,15 @@ export class StreamFlow {
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
     await this.unpinLiveCard(chatId);
     this.queues.reset(chatId);
-    await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.stopped", {}, locale) }, "interactive");
+    await this.sender.enqueue(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: `⏹️ *Stream Stopped*\n\nVoice chat session ended. Assistant account (@${this.assistantUsername}) remains in this group ready for future streams!`,
+        parse_mode: "Markdown",
+      },
+      "interactive",
+    );
   }
 
   /** /pause + /resume — admins only (optimistic card, worker event confirms). */
@@ -587,14 +775,14 @@ export class StreamFlow {
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: renderQueue(s.current, s.queue, locale), parse_mode: "Markdown" }, "interactive");
   }
 
-  /** Transport buttons (sp/sr/ss/sx/slp/svl/sqe). Check that a stream is active. */
+  /** Transport buttons check: responsive and robust. */
   private check(target: string, chatId: number): boolean {
     const s = this.queues.get(chatId);
-    if (s.state === "idle") return false;
+    if (s.state === "idle" && !this.queues.isSessionActive(chatId)) return false;
     const m = /^v(\d+)$/.exec(target);
     if (!m) return true;
     const ver = Number(m[1]);
-    return Math.abs(ver - s.version) <= 5;
+    return Math.abs(ver - s.version) <= 50;
   }
 
   async buttonPause(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
@@ -623,12 +811,19 @@ export class StreamFlow {
   }
 
   async buttonStop(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
-    if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
     await this.unpinLiveCard(chatId);
     this.queues.reset(chatId);
-    await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.stopped", {}, locale) }, "interactive");
+    await this.sender.enqueue(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: `⏹️ *Stream Stopped*\n\nVoice chat session ended. Assistant account (@${this.assistantUsername}) remains in this group ready for future streams!`,
+        parse_mode: "Markdown",
+      },
+      "interactive",
+    );
     return "ok";
   }
 
@@ -636,8 +831,11 @@ export class StreamFlow {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
     const nextVol = delta !== 0 ? this.queues.adjustVolume(chatId, delta) : this.queues.cycleVolume(chatId);
-    await this.bus.publish(buildCmd("stream.volume", chatId, { level: nextVol })).catch(() => {});
-    await this.showCard(chatId, locale);
+    const s = this.queues.get(chatId);
+    if (s.state !== "idle") {
+      await this.bus.publish(buildCmd("stream.volume", chatId, { level: nextVol })).catch(() => {});
+      await this.showCard(chatId, locale);
+    }
     return "ok";
   }
 
@@ -650,7 +848,6 @@ export class StreamFlow {
   }
 
   async buttonQueue(chatId: number, target: string, locale = "en"): Promise<ButtonResult> {
-    if (!this.check(target, chatId)) return "stale";
     await this.viewQueue(chatId, locale);
     return "ok";
   }
@@ -667,9 +864,10 @@ export class StreamFlow {
       case "track.started":
         this.queues.setState(chatId, "live");
         await this.showCard(chatId, locale);
+        this.preResolveQueue(chatId).catch(() => {});
         break;
       case "track.ended":
-        if (s.state === "idle") return;
+        if (s.state === "idle" && !this.queues.isSessionActive(chatId)) return;
         await this.startNext(chatId, locale, true);
         break;
       case "paused":
@@ -682,22 +880,33 @@ export class StreamFlow {
         break;
       case "call.left":
         await this.unpinLiveCard(chatId);
-        if (s.state !== "idle") {
+        if (s.state !== "idle" && !this.queues.isSessionActive(chatId)) {
           this.queues.reset(chatId);
-          await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.left", {}, locale) }, "interactive");
+          await this.sender.enqueue(
+            "sendMessage",
+            {
+              chat_id: chatId,
+              text: `📻 Voice chat playback ended. @${this.assistantUsername} remains in the group.`,
+            },
+            "interactive",
+          );
         }
         break;
       case "error":
         this.log.warn("worker error", { chatId, code: evt.error?.code, message: evt.error?.message });
-        await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
-        await this.unpinLiveCard(chatId);
-        this.queues.setState(chatId, "idle");
-        this.queues.reset(chatId);
-        await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.error", { e: evt.error?.message ?? "unknown" }, locale) }, "interactive");
+        if (this.queues.isSessionActive(chatId)) {
+          // If session is active, try advancing to next track instead of killing session
+          await this.startNext(chatId, locale, false);
+        } else {
+          await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+          await this.unpinLiveCard(chatId);
+          this.queues.setState(chatId, "idle");
+          this.queues.reset(chatId);
+          await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.error", { e: evt.error?.message ?? "unknown" }, locale) }, "interactive");
+        }
         break;
       case "pong":
         break;
     }
   }
 }
-

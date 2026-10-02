@@ -66,15 +66,15 @@ export function renderStreamConnectingRich(
     .pullquote("PAPPY Media · Sub-second Voice Chat Radio");
 
   const transport: KbButton[] = [
-    { text: "⏸ Pause", callback_data: packCb("sp", v, 1), style: "primary" },
-    { text: "⏭ Next", callback_data: packCb("ss", v, 1), style: "primary" },
-    { text: "⏹ Stop", callback_data: packCb("sx", v, 1), style: "danger" },
+    { text: "⏸ Pause", callback_data: packCb("sp", "now", 1), style: "primary" },
+    { text: "⏭ Next", callback_data: packCb("ss", "now", 1), style: "primary" },
+    { text: "⏹ Stop", callback_data: packCb("sx", "now", 1), style: "danger" },
   ];
 
   const volControls: KbButton[] = [
-    { text: "🔉 Vol -10%", callback_data: packCb("svd", v, 1), style: "default" },
-    { text: "🔊 100%", callback_data: packCb("svl", v, 1), style: "primary" },
-    { text: "🔊 Vol +10%", callback_data: packCb("svu", v, 1), style: "default" },
+    { text: "🔉 Vol -10%", callback_data: packCb("svd", "now", 1), style: "default" },
+    { text: "🔊 100%", callback_data: packCb("svl", "now", 1), style: "primary" },
+    { text: "🔊 Vol +10%", callback_data: packCb("svu", "now", 1), style: "default" },
   ];
 
   const rendered = builder.build();
@@ -94,23 +94,22 @@ export function renderLiveCard(d: LiveCardData, locale = "en"): FallbackMessage 
   const vol = d.volume ?? 100;
   const sessionInfo = d.sessionRemainingMinutes ? ` • 📻 ${d.sessionRemainingMinutes}m left` : "";
   lines.push(`📋 ${d.queueLen} ${t("stream.queue.next", {}, locale)}  •  ${loopLabel}  •  🔊 ${vol}%${sessionInfo}`);
-  const v = `v${d.version}`;
   const transport: KbButton[] =
     d.state === "paused"
-      ? [{ text: "▶ Resume", callback_data: packCb("sr", v, 1), style: "success" }]
-      : [{ text: "⏸ Pause", callback_data: packCb("sp", v, 1), style: "primary" }];
-  transport.push({ text: "⏭ Next", callback_data: packCb("ss", v, 1), style: "primary" });
-  transport.push({ text: "⏹ Stop", callback_data: packCb("sx", v, 1), style: "danger" });
+      ? [{ text: "▶️ Resume", callback_data: packCb("sr", "now", 1), style: "success" }]
+      : [{ text: "⏸️ Pause", callback_data: packCb("sp", "now", 1), style: "primary" }];
+  transport.push({ text: "⏭️ Next", callback_data: packCb("ss", "now", 1), style: "primary" });
+  transport.push({ text: "⏹️ Stop", callback_data: packCb("sx", "now", 1), style: "danger" });
 
   const volControls: KbButton[] = [
-    { text: "🔉 -10%", callback_data: packCb("svd", v, 1), style: "default" },
-    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1), style: "primary" },
-    { text: "🔊 +10%", callback_data: packCb("svu", v, 1), style: "default" },
+    { text: "🔉 Vol -10%", callback_data: packCb("svd", "now", 1), style: "default" },
+    { text: `🔊 ${vol}%`, callback_data: packCb("svl", "now", 1), style: "primary" },
+    { text: "🔊 Vol +10%", callback_data: packCb("svu", "now", 1), style: "default" },
   ];
 
   const controls: KbButton[] = [
-    { text: loopLabel, callback_data: packCb("slp", v, 1), style: "default" },
-    { text: "📋 Queue", callback_data: packCb("sqe", v, 1), style: "default" },
+    { text: loopLabel, callback_data: packCb("slp", "now", 1), style: "default" },
+    { text: `📋 Queue (${d.queueLen})`, callback_data: packCb("sqe", "now", 1), style: "default" },
     { text: "🔄 Refresh", callback_data: packCb("gm", "refresh", 1), style: "default" },
   ];
 
@@ -127,24 +126,23 @@ export function renderLiveCardRich(d: LiveCardData, locale = "en"): Record<strin
         : `STARTING STREAM // ${t("stream.live.starting", {}, locale)}`;
   const loopLabel = d.loopMode === "track" ? "🔂 Track" : d.loopMode === "queue" ? "🔁 Queue" : "🔁 Off";
   const vol = d.volume ?? 100;
-  const v = `v${d.version}`;
 
   const transport: KbButton[] =
     d.state === "paused"
-      ? [{ text: "▶ Resume", callback_data: packCb("sr", v, 1), style: "success" }]
-      : [{ text: "⏸ Pause", callback_data: packCb("sp", v, 1), style: "primary" }];
-  transport.push({ text: "⏭ Next", callback_data: packCb("ss", v, 1), style: "primary" });
-  transport.push({ text: "⏹ Stop", callback_data: packCb("sx", v, 1), style: "danger" });
+      ? [{ text: "▶️ Resume", callback_data: packCb("sr", "now", 1), style: "success" }]
+      : [{ text: "⏸️ Pause", callback_data: packCb("sp", "now", 1), style: "primary" }];
+  transport.push({ text: "⏭️ Next", callback_data: packCb("ss", "now", 1), style: "primary" });
+  transport.push({ text: "⏹️ Stop", callback_data: packCb("sx", "now", 1), style: "danger" });
 
   const volControls: KbButton[] = [
-    { text: "🔉 Vol -10%", callback_data: packCb("svd", v, 1), style: "default" },
-    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1), style: "primary" },
-    { text: "🔊 Vol +10%", callback_data: packCb("svu", v, 1), style: "default" },
+    { text: "🔉 Vol -10%", callback_data: packCb("svd", "now", 1), style: "default" },
+    { text: `🔊 ${vol}% Master`, callback_data: packCb("svl", "now", 1), style: "primary" },
+    { text: "🔊 Vol +10%", callback_data: packCb("svu", "now", 1), style: "default" },
   ];
 
   const controls: KbButton[] = [
-    { text: loopLabel, callback_data: packCb("slp", v, 1), style: "default" },
-    { text: `📋 Queue (${d.queueLen})`, callback_data: packCb("sqe", v, 1), style: "default" },
+    { text: loopLabel, callback_data: packCb("slp", "now", 1), style: "default" },
+    { text: `📋 Queue (${d.queueLen})`, callback_data: packCb("sqe", "now", 1), style: "default" },
     { text: "🔄 Refresh", callback_data: packCb("gm", "refresh", 1), style: "default" },
   ];
 
@@ -177,21 +175,28 @@ export function renderLiveCardRich(d: LiveCardData, locale = "en"): Record<strin
       { text: `🔊 ${vol}%`, align: "left" as const, valign: "middle" as const },
     ],
     [
+      { text: "Assistant", align: "left" as const, valign: "middle" as const },
+      { text: "🟢 @pappy_d_spammer (Admin)", align: "left" as const, valign: "middle" as const },
+    ],
+    [
       { text: "Telemetry", align: "left" as const, valign: "middle" as const },
-      { text: "⚡ 320kbps Lossless · 16ms Latency · WebRTC OK", align: "left" as const, valign: "middle" as const },
+      { text: "⚡ Opus 48kHz / 320kbps · 16ms Latency · WebRTC OK", align: "left" as const, valign: "middle" as const },
     ],
   ];
 
   const builder = new RichMessageBuilder()
-    .heading(2, `🔴 ${head}`)
+    .heading(1, `🔴 ${head}`)
+    .paragraph("High-Fidelity Lossless Voice Chat Radio Broadcast")
     .divider()
     .table(specRows, { is_bordered: true, is_striped: true })
-    .details("ℹ️ Voice Chat Controls", [
+    .details("ℹ️ Live Stream Deck Instructions", [
       {
         type: "paragraph",
-        text: "Tap ▶/⏸ to toggle playback, ⏭ to skip to next queued song, ⏹ to disconnect bot. Volume buttons adjust loudness instantly in real time.",
+        text: "• Tap ▶️/⏸️ to toggle stream playback\n• Tap ⏭️ to skip to the next queued track\n• Tap 🔉 / 🔊 buttons to adjust master volume in real-time\n• Tap ⏹️ to disconnect the bot from voice chat\n• Assistant stays in the group permanently as admin.",
       },
-    ]);
+    ])
+    .pullquote("PAPPY Media · Voice Chat Radio · credit @holypappy")
+    .footer("PAPPY Media · Voice Chat Radio · credit @holypappy");
 
   const rendered = builder.build();
   return {

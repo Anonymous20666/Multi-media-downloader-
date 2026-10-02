@@ -116,6 +116,17 @@ export interface VoiceNoteBlock {
   caption?: { text: string };
 }
 
+export interface ButtonsBlock {
+  type: "buttons";
+  buttons: Array<{ text: string; callback_data?: string; url?: string; style?: "default" | "primary" | "danger" | "success" }>;
+  align?: "left" | "center" | "right";
+}
+
+export interface FooterBlock {
+  type: "footer";
+  text: string;
+}
+
 export type RichBlock =
   | HeadingBlock
   | ParagraphBlock
@@ -130,7 +141,9 @@ export type RichBlock =
   | AudioBlock
   | VideoBlock
   | AnimationBlock
-  | VoiceNoteBlock;
+  | VoiceNoteBlock
+  | ButtonsBlock
+  | FooterBlock;
 
 export interface RichMessageEnvelope {
   blocks: RichBlock[];
@@ -256,6 +269,20 @@ export class RichMessageBuilder {
     return this;
   }
 
+  buttons(buttons: ButtonsBlock["buttons"], align?: "left" | "center" | "right"): this {
+    this.blocks.push({
+      type: "buttons",
+      buttons,
+      ...(align ? { align } : {}),
+    });
+    return this;
+  }
+
+  footer(text: string): this {
+    this.blocks.push({ type: "footer", text });
+    return this;
+  }
+
   rtl(isRtl = true): this {
     this.isRtl = isRtl;
     return this;
@@ -348,6 +375,12 @@ function blocksToMarkdown(blocks: RichBlock[]): string {
         if (block.caption?.text) {
           lines.push(`[${block.type.toUpperCase()}] ${block.caption.text}`, "");
         }
+        break;
+      case "footer":
+        lines.push(`_${block.text}_`, "");
+        break;
+      case "buttons":
+        lines.push(block.buttons.map((b) => `[ ${b.text} ]`).join("  "), "");
         break;
     }
   }

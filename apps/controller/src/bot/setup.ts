@@ -605,12 +605,22 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
                   : await flows.stream.buttonStop(chatId, userId, parsed.target);
           if (r === "stale") await toast(t("stream.stale"));
           else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else if (r === "idle") await toast("ℹ️ No stream is currently playing");
+          else if (parsed.action === "sp") await toast("⏸ Stream paused");
+          else if (parsed.action === "sr") await toast("▶ Stream resumed");
+          else if (parsed.action === "ss") await toast("⏭ Skipping track...");
+          else if (parsed.action === "sx") await toast("⏹ Stream stopped");
           break;
         }
         case "slp": {
           const r = await flows.stream.buttonLoop(chatId, userId, parsed.target);
           if (r === "stale") await toast(t("stream.stale"));
           else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else {
+            const mode = flows.stream.getLoopMode(chatId);
+            const loopLabel = mode === "track" ? "🔂 Track" : mode === "queue" ? "🔁 Queue" : "Off";
+            await toast(`🔁 Loop: ${loopLabel}`);
+          }
           break;
         }
         case "svl":

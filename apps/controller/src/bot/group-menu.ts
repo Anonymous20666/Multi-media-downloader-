@@ -26,65 +26,56 @@ export function renderGroupMenuRich(chatTitle: string, locale = "en"): GroupMenu
 
   const rows: KbButton[][] = [
     [
-      { text: "🎵 Music", callback_data: packCb("gm", "play", 1), style: "primary" },
+      { text: "🎵 Music Catalog", callback_data: packCb("gm", "play", 1), style: "primary" },
       { text: "📡 Stream in VC", callback_data: packCb("gm", "stream", 1), style: "success" },
     ],
     [
-      { text: "🎬 Cinema", callback_data: packCb("gm", "movies", 1), style: "primary" },
-      { text: "🎞 Shorts", callback_data: packCb("gm", "shorts", 1), style: "primary" },
+      { text: "🎬 Cinema & Anime", callback_data: packCb("gm", "movies", 1), style: "primary" },
+      { text: "🎞 Reels & Shorts", callback_data: packCb("gm", "shorts", 1), style: "primary" },
     ],
     [
-      { text: "▶ Resume", callback_data: packCb("sr", "v0", 1), style: "success" },
-      { text: "⏸ Pause", callback_data: packCb("sp", "v0", 1), style: "primary" },
+      { text: "📋 Active Queue", callback_data: packCb("sqe", "1", 1), style: "default" },
+      { text: "⚙️ Console Settings", callback_data: packCb("gm", "settings", 1), style: "default" },
     ],
     [
-      { text: "⏭ Next Track", callback_data: packCb("ss", "v0", 1), style: "primary" },
-      { text: "⏹ Stop Stream", callback_data: packCb("sx", "v0", 1), style: "danger" },
-    ],
-    [
-      { text: "🔉 Vol -10%", callback_data: packCb("svd", "v0", 1), style: "default" },
-      { text: "🔊 Vol +10%", callback_data: packCb("svu", "v0", 1), style: "default" },
-    ],
-    [
-      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1), style: "default" },
-      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1), style: "default" },
+      { text: "🔄 Refresh Status", callback_data: packCb("gm", "refresh", 1), style: "default" },
     ],
   ];
 
   const builder = new RichMessageBuilder()
-    .heading(2, `⸸ ${safeTitle.toUpperCase()}`)
+    .heading(1, `⸸ ${safeTitle.toUpperCase()}`)
     .paragraph("Private Publishing & Streaming Console")
     .divider()
-    .heading(4, "⚙️ System status")
+    .heading(3, "⚙️ System status")
     .table(
       [
         [
-          { text: "Music", is_header: true, align: "left", valign: "middle" },
+          { text: "Component", is_header: true, align: "left", valign: "middle" },
+          { text: "Live State", is_header: true, align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Music Engine", align: "left", valign: "middle" },
           { text: "LOSSLESS · ONLINE", align: "left", valign: "middle" },
         ],
         [
-          { text: "Cinema", align: "left", valign: "middle" },
+          { text: "Cinema Pipeline", align: "left", valign: "middle" },
           { text: "4K / 1080p FHD", align: "left", valign: "middle" },
         ],
         [
-          { text: "Live VC", align: "left", valign: "middle" },
+          { text: "Live VC Gateway", align: "left", valign: "middle" },
           { text: "24/7 WebRTC Radio", align: "left", valign: "middle" },
         ],
         [
-          { text: "Shorts", align: "left", valign: "middle" },
+          { text: "Shorts & Media", align: "left", valign: "middle" },
           { text: "Original Clean MP4", align: "left", valign: "middle" },
         ],
         [
-          { text: "Audio", align: "left", valign: "middle" },
-          { text: "ENABLED (HQ)", align: "left", valign: "middle" },
+          { text: "Audio Protocol", align: "left", valign: "middle" },
+          { text: "Opus 48kHz / 320kbps", align: "left", valign: "middle" },
         ],
         [
-          { text: "Stream Deck", align: "left", valign: "middle" },
-          { text: "CONFIGURED", align: "left", valign: "middle" },
-        ],
-        [
-          { text: "Jobs recorded", align: "left", valign: "middle" },
-          { text: "0 · 0 failed", align: "left", valign: "middle" },
+          { text: "Assistant Status", align: "left", valign: "middle" },
+          { text: "🟢 @pappy_d_spammer (Admin)", align: "left", valign: "middle" },
         ],
       ],
       { is_bordered: true, is_striped: true },
@@ -93,15 +84,16 @@ export function renderGroupMenuRich(chatTitle: string, locale = "en"): GroupMenu
     .details("📋 Sections & Capabilities", [
       {
         type: "paragraph",
-        text: "• Music — search, queue and full lossless streaming\n• Destinations — preview and voice chat streaming\n• Cinema — 4K movies, anime and trailers\n• Shorts — TikTok, IG and clean clip downloads\n• Queue — live track order & skip\n• Settings — volume, audio engine and deck config\n• Diagnostics — health and worker connection",
+        text: "• Music — search, queue and full lossless streaming\n• Stream in VC — interactive voice chat DJ radio with live deck\n• Cinema — 4K movies, anime and trailers\n• Shorts — TikTok, IG and clean clip downloads\n• Queue — live track order & skip\n• Settings — audio engine and console configuration",
       },
       {
         type: "pre",
-        text: "Group Commands:\n• /menu — Open this smart deck\n• /play <song> — Stream or queue music\n• /stream — Launch interactive streaming wizard\n• /queue — Check upcoming tracks\n• /vol <0-200> — Adjust stream volume\n• /skip — Skip current song",
+        text: "Commands:\n• /menu — Open this smart console\n• /play <song> — Stream or queue music\n• /stream — Launch voice chat streaming wizard\n• /queue — Check upcoming tracks\n• /vol <0-200> — Master stream volume\n• /skip — Skip current song\n• /stop — Stop current stream",
         language: "yaml",
       },
     ])
-    .pullquote("PAPPY Media · owner-only console · credit @holypappy");
+    .pullquote("PAPPY Media · owner-only console · credit @holypappy")
+    .footer("PAPPY Media · owner-only console · credit @holypappy");
 
   const rendered = builder.build();
   return {

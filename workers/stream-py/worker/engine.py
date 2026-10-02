@@ -145,7 +145,7 @@ class PyTgCallsEngine(CallEngine):
         self._call.start()
 
     def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
-        from pytgcalls.types import AudioQuality, VideoQuality, MediaStream
+        from pytgcalls.types import AudioQuality, VideoQuality, MediaStream, GroupCallConfig
 
         if is_video:
             stream = MediaStream(
@@ -161,31 +161,23 @@ class PyTgCallsEngine(CallEngine):
                 video_flags=MediaStream.Flags.IGNORE,
                 headers=headers or None,
             )
+        config = GroupCallConfig(auto_start=True)
         try:
-            self._call.play(chat_id, stream)
+            self._call.play(chat_id, stream, config=config)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             err_name = type(e).__name__
             err_msg = str(e)
-            if "NoActiveGroupCall" in err_name or "No active group call" in err_msg or "GroupCallNotFound" in err_name:
+            if "TransportParseException" in err_name or "Transport not found" in err_msg or "Timeout" in err_name or "ConnectionNotFound" in err_name:
                 try:
-                    import random
                     import time
-                    from pyrogram.raw.functions.phone import CreateGroupCall
-                    from pytgcalls.sync import async_to_sync
-
-                    async def _create():
-                        peer = await self._app.resolve_peer(chat_id)
-                        await self._app.invoke(CreateGroupCall(
-                            peer=peer,
-                            random_id=random.randint(10000, 99999999),
-                            title="Pappy / Omega Live Stream"
-                        ))
-
-                    async_to_sync(_create)()
-                    time.sleep(2)
-                    self._call.play(chat_id, stream)
-                except Exception as inner_e:
-                    raise EngineError("NO_GROUP_CALL", "Voice chat is not active. Please start a Video/Voice Chat in the group header.") from inner_e
+                    time.sleep(1.5)
+                    self._call.play(chat_id, stream, config=config)
+                except Exception as retry_e:
+                    raise EngineError("PLAY_FAILED", f"{type(retry_e).__name__}: {retry_e}") from retry_e
+            elif "NoActiveGroupCall" in err_name or "No active group call" in err_msg or "GroupCallNotFound" in err_name:
+                raise EngineError("NO_GROUP_CALL", "Voice chat is not active. Please start a Video/Voice Chat in the group header.") from e
             elif "UserNotParticipant" in err_name or "USER_NOT_PARTICIPANT" in err_msg:
                 raise EngineError("NOT_IN_GROUP", "Assistant account is not in this group. Please add @pappy_d_spammer to this group.") from e
             elif "ChatAdminRequired" in err_name or "CHAT_ADMIN_REQUIRED" in err_msg:

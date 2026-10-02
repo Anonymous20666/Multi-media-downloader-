@@ -7,6 +7,7 @@ export interface QueuedTrack {
   title: string;
   performer?: string;
   pageUrl: string;
+  mediaUrl?: string;
   duration?: number | null;
   addedBy: number;
   isVideo?: boolean;

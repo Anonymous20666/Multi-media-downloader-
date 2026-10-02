@@ -231,6 +231,8 @@ def main() -> int:
                     pass  # dispatch already emitted track.started with the track attached
                 elif ev.kind == "ended":
                     bus.publish_evt(C.build_evt(C.Evt(name="track.ended", stream_id=sid, chat_id=ev.chat_id)))
+                elif ev.kind == "call.left":
+                    bus.publish_evt(C.build_evt(C.Evt(name="call.left", stream_id=sid, chat_id=ev.chat_id)))
                 elif ev.kind == "error":
                     bus.publish_evt(C.build_evt(C.Evt(name="error", stream_id=sid, chat_id=ev.chat_id, error={"code": "ENGINE", "message": ev.message})))
         except queue.Empty:

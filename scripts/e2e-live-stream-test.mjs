@@ -79,8 +79,12 @@ async function main() {
   console.log(`🎵 Selected Track: "${trackItem.title}" by ${trackItem.author || "Lithe"}`);
   console.log(`🔗 Resolving fresh media stream URL from: ${trackItem.pageUrl}...`);
   const resolved = await mgr.resolve(trackItem.pageUrl);
-  const mediaUrl = resolved.manifest.media.find((m) => m.type === "audio")?.url || resolved.manifest.media[0]?.url;
-  console.log(`✅ Media URL resolved! Type: audio, URL length: ${mediaUrl.length} chars`);
+  const audioMedia = resolved.manifest.media.find((m) => m.type === "audio" || m.hasAudio) || (trackItem.previewUrl ? { type: "audio", url: trackItem.previewUrl } : null);
+  if (!audioMedia?.url) {
+    throw new Error(`Failed to find real audio stream in manifest! Found: ${JSON.stringify(resolved.manifest.media)}`);
+  }
+  const mediaUrl = audioMedia.url;
+  console.log(`✅ Real Audio URL verified! (${mediaUrl.slice(0, 65)}...)`);
 
   // Step 3: Connect to Redis Bus
   console.log("\n[Step 3] Connecting to Redis Bus...");
@@ -215,6 +219,7 @@ async function main() {
       chat_id: CHAT_ID,
       message_id: liveCardMsg.message_id,
     });
+    await botApi("unpinChatMessage", { chat_id: CHAT_ID }).catch(() => {});
     console.log("🧹 Successfully unpinned Live Deck from group!");
   } catch (e) {
     console.log(`⚠️ Unpin note: ${e.message}`);

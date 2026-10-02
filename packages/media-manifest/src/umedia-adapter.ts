@@ -119,7 +119,46 @@ export class UmediaAdapter implements MediaProvider {
         hasAudio: m["hasAudio"],
         hasVideo: m["hasVideo"],
       }));
-      const counts = (d["counts"] as Record<string, number>) ?? {};
+      const counts = ((d["counts"] as Record<string, number>) ?? {});
+
+      if (!media.some((m) => m.hasAudio || m.type === "audio")) {
+        const appleMatch =
+          /[?&]i=(\d+)/.exec(safe.href) ||
+          /music\.apple\.com\/[^/]+\/album\/[^/]+\/(\d+)/.exec(safe.href) ||
+          /itunes\.apple\.com\/[^/]+\/album\/[^/]+\/(\d+)/.exec(safe.href);
+        if (appleMatch && appleMatch[1]) {
+          try {
+            const lr = await fetch(`https://itunes.apple.com/lookup?id=${appleMatch[1]}`, {
+              headers: { "User-Agent": "PappyMedia/1.0" },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (lr.ok) {
+              const lj = (await lr.json()) as { results?: Array<{ previewUrl?: string; artworkUrl100?: string; trackTimeMillis?: number }> };
+              const track = lj.results?.[0];
+              if (track?.previewUrl) {
+                media.unshift({
+                  type: "audio",
+                  index: 0,
+                  url: track.previewUrl,
+                  thumbnail: track.artworkUrl100 ? track.artworkUrl100.replace("100x100bb", "600x600bb") : ((d["thumbnail"] as string) ?? null),
+                  mimeType: "audio/mp4",
+                  width: null,
+                  height: null,
+                  duration: track.trackTimeMillis ? track.trackTimeMillis / 1000 : ((d["duration"] as number) ?? null),
+                  size: null,
+                  quality: "original",
+                  hasAudio: true,
+                  hasVideo: false,
+                });
+                counts["audios"] = (counts["audios"] ?? 0) + 1;
+              }
+            }
+          } catch {
+            // best-effort fallback
+          }
+        }
+      }
+
       const kinds = (counts["images"] ? 1 : 0) + (counts["videos"] ? 1 : 0) + (counts["audios"] ? 1 : 0);
       const manifest = parseManifest({
         v: "1",

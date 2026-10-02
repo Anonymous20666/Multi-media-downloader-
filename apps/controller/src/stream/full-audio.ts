@@ -7,8 +7,10 @@ const exec = promisify(execFile);
 export interface ResolvedFullTrack {
   title: string;
   author?: string;
+  album?: string;
   duration?: number;
   url: string;
+  thumbnail?: string;
 }
 
 // In-memory cache for ultra-fast instant track lookups (< 1ms)
@@ -35,7 +37,7 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
     "--skip-download",
     "--no-check-certificates",
     "--socket-timeout", "6",
-    "--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(url)s",
+    "--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(url)s\t%(thumbnail)s",
   ];
 
   const cookiePath = "/opt/umedia/secrets/yt_cookies.txt";
@@ -59,7 +61,7 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
     const parts = lastLine.split("\t");
     if (parts.length < 4 || !parts[3]) return null;
 
-    const [title, author, rawDur, url] = parts;
+    const [title, author, rawDur, url, thumb] = parts;
     const durNum = rawDur && rawDur !== "NA" ? Math.round(parseFloat(rawDur)) : undefined;
 
     const result: ResolvedFullTrack = {
@@ -67,6 +69,7 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
       author: author && author !== "NA" ? author : undefined,
       duration: durNum,
       url: parts[3].trim(),
+      thumbnail: thumb && thumb !== "NA" ? thumb.trim() : undefined,
     };
 
     cache.set(normKey, { track: result, expiresAt: Date.now() + CACHE_TTL_MS });
@@ -86,8 +89,10 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
       const result: ResolvedFullTrack = {
         title: data.title || "Unknown Track",
         author: data.uploader || data.channel || data.artist || undefined,
+        album: data.album || undefined,
         duration: typeof data.duration === "number" ? Math.round(data.duration) : undefined,
         url: data.url,
+        thumbnail: data.thumbnail || (Array.isArray(data.thumbnails) && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1]?.url : undefined),
       };
       cache.set(normKey, { track: result, expiresAt: Date.now() + CACHE_TTL_MS });
       return result;

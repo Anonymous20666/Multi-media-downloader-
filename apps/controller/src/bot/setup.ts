@@ -671,6 +671,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         case "sp":
         case "sr":
         case "ss":
+        case "spv":
         case "sx": {
           const r =
             parsed.action === "sp"
@@ -679,14 +680,83 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
                 ? await flows.stream.buttonResume(chatId, userId, parsed.target)
                 : parsed.action === "ss"
                   ? await flows.stream.buttonSkip(chatId, userId, parsed.target)
-                  : await flows.stream.buttonStop(chatId, userId, parsed.target);
+                  : parsed.action === "spv"
+                    ? await flows.stream.buttonPrevious(chatId, userId, parsed.target)
+                    : await flows.stream.buttonStop(chatId, userId, parsed.target);
           if (r === "stale") await toast(t("stream.stale"));
           else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else if (r === "debounced") await toast("⏳ Please wait a moment...", false);
           else if (r === "idle") await toast("ℹ️ No stream is currently playing");
           else if (parsed.action === "sp") await toast("⏸ Stream paused");
           else if (parsed.action === "sr") await toast("▶ Stream resumed");
           else if (parsed.action === "ss") await toast("⏭ Skipping track...");
+          else if (parsed.action === "spv") await toast("⏮ Previous track...");
           else if (parsed.action === "sx") await toast("⏹ Stream stopped");
+          break;
+        }
+        case "ssh": {
+          const r = await flows.stream.buttonShuffle(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else if (r === "debounced") await toast("⏳ Please wait a moment...", false);
+          else await toast("🔀 Queue shuffled!");
+          break;
+        }
+        case "sqc": {
+          const r = await flows.stream.buttonClearQueue(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else if (r === "debounced") await toast("⏳ Please wait a moment...", false);
+          else await toast("🗑 Queue cleared!");
+          break;
+        }
+        case "srf": {
+          const r = await flows.stream.buttonRefresh(chatId, userId, parsed.target);
+          if (r === "debounced") await toast("⏳ Please wait a moment...", false);
+          else await toast("🔄 Live Deck refreshed!");
+          break;
+        }
+        case "sdt": {
+          const r = await flows.stream.buttonDetails(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "debounced") await toast("⏳ Please wait a moment...", false);
+          else await toast("💿 Showing technical stream specs");
+          break;
+        }
+        case "sly": {
+          const r = await flows.stream.buttonLyrics(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "debounced") await toast("⏳ Please wait a moment...", false);
+          else await toast("🎤 Showing track lyrics");
+          break;
+        }
+        case "sst": {
+          const r = await flows.stream.buttonSettings(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else if (r === "debounced") await toast("⏳ Please wait a moment...", false);
+          else await toast("⚙️ Stream settings menu");
+          break;
+        }
+        case "stg": {
+          const r = await flows.stream.buttonSettingToggle(chatId, userId, parsed.target, "now");
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else await toast("⚙️ Setting updated!");
+          break;
+        }
+        case "sdl": {
+          const res = await flows.stream.buttonDownload(chatId, userId, parsed.target);
+          if (res.result === "stale") await toast(t("stream.stale"));
+          else if (res.result === "idle") await toast("ℹ️ No track is currently playing");
+          else await toast(`⬇️ Download initiated for ${res.trackTitle || "track"}`);
+          break;
+        }
+        case "sad": {
+          const r = await flows.stream.buttonAddPrompt(chatId, userId, parsed.target);
+          if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else await toast("➕ Send /play <song> to queue tracks");
           break;
         }
         case "slp": {
@@ -711,7 +781,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           break;
         }
         case "sqe": {
-          const r = await flows.stream.buttonQueue(chatId, parsed.target, "en", userId);
+          const r = await flows.stream.buttonQueueDeck(chatId, userId, parsed.target);
           if (r === "stale") await toast(t("stream.stale"));
           else if (r === "denied") await toast(t("stream.need_admin"), true);
           break;

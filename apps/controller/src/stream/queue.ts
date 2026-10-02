@@ -6,31 +6,69 @@
 export interface QueuedTrack {
   title: string;
   performer?: string;
+  album?: string;
+  artworkUrl?: string;
   pageUrl: string;
   mediaUrl?: string;
   duration?: number | null;
   addedBy: number;
   isVideo?: boolean;
+  lyrics?: string;
 }
 
-export type PlayState = "idle" | "starting" | "live" | "paused";
+export type PlayState =
+  | "idle"
+  | "requested"
+  | "searching"
+  | "resolving"
+  | "preparing"
+  | "ready"
+  | "starting"
+  | "streaming"
+  | "live"
+  | "paused"
+  | "buffering"
+  | "switching"
+  | "stopping"
+  | "completed"
+  | "vc_ended"
+  | "failed"
+  | "recovering";
 
 export type LoopMode = "off" | "track" | "queue";
+
+export interface StreamSessionSettings {
+  autoLeaveOnFinish: boolean;
+  pinPlayerCard: boolean;
+  audioQuality: "lossless" | "high" | "standard";
+  speakerBoost: boolean;
+}
 
 export interface ChatStream {
   state: PlayState;
   queue: QueuedTrack[];
+  history: QueuedTrack[];
   current: QueuedTrack | null;
   liveCard?: { chatId: number; messageId: number };
   version: number;
   loopMode: LoopMode;
   volume: number;
+  startedAt?: number;
   sessionEndTime?: number;
   sessionVibe?: string;
   sessionDurationMinutes?: number;
+  settings: StreamSessionSettings;
 }
 
 export const MAX_QUEUE = 50;
+export const MAX_HISTORY = 20;
+
+export const DEFAULT_SETTINGS: StreamSessionSettings = {
+  autoLeaveOnFinish: true,
+  pinPlayerCard: true,
+  audioQuality: "lossless",
+  speakerBoost: true,
+};
 
 export class StreamQueues {
   private map = new Map<number, ChatStream>();
@@ -38,7 +76,16 @@ export class StreamQueues {
   get(chatId: number): ChatStream {
     let s = this.map.get(chatId);
     if (!s) {
-      s = { state: "idle", queue: [], current: null, version: 1, loopMode: "off", volume: 100 };
+      s = {
+        state: "idle",
+        queue: [],
+        history: [],
+        current: null,
+        version: 1,
+        loopMode: "off",
+        volume: 100,
+        settings: { ...DEFAULT_SETTINGS },
+      };
       this.map.set(chatId, s);
     }
     return s;
@@ -52,12 +99,17 @@ export class StreamQueues {
     return { position: s.queue.length };
   }
 
-  /** Shift next → current. Supports natural track end looping. */
+  /** Shift next → current. Supports natural track end looping and stores history. */
   advance(chatId: number, opts?: { naturalEnd?: boolean }): QueuedTrack | null {
     const s = this.get(chatId);
+    if (s.current) {
+      this.pushHistory(chatId, s.current);
+    }
+
     if (opts?.naturalEnd) {
       if (s.loopMode === "track" && s.current) {
         s.version++;
+        s.startedAt = Date.now();
         return s.current;
       }
       if (s.loopMode === "queue" && s.current) {
@@ -65,8 +117,55 @@ export class StreamQueues {
       }
     }
     s.current = s.queue.shift() ?? null;
+    s.startedAt = s.current ? Date.now() : undefined;
     s.version++;
     return s.current;
+  }
+
+  pushHistory(chatId: number, track: QueuedTrack): void {
+    const s = this.get(chatId);
+    s.history.unshift(track);
+    if (s.history.length > MAX_HISTORY) {
+      s.history.pop();
+    }
+  }
+
+  popHistory(chatId: number): QueuedTrack | null {
+    const s = this.get(chatId);
+    if (s.history.length === 0) return null;
+    const prev = s.history.shift()!;
+    if (s.current) {
+      s.queue.unshift(s.current);
+    }
+    s.current = prev;
+    s.startedAt = Date.now();
+    s.version++;
+    return prev;
+  }
+
+  shuffle(chatId: number): boolean {
+    const s = this.get(chatId);
+    if (s.queue.length <= 1) return false;
+    for (let i = s.queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const temp = s.queue[i]!;
+      s.queue[i] = s.queue[j]!;
+      s.queue[j] = temp;
+    }
+    s.version++;
+    return true;
+  }
+
+  setCurrentStarted(chatId: number): void {
+    const s = this.get(chatId);
+    s.startedAt = Date.now();
+    s.version++;
+  }
+
+  getElapsedSeconds(chatId: number): number {
+    const s = this.get(chatId);
+    if (!s.startedAt || s.state === "idle" || s.state === "vc_ended") return 0;
+    return Math.max(0, Math.floor((Date.now() - s.startedAt) / 1000));
   }
 
   remove(chatId: number, idx: number): boolean {
@@ -133,6 +232,13 @@ export class StreamQueues {
     return s.volume;
   }
 
+  updateSettings(chatId: number, patch: Partial<StreamSessionSettings>): StreamSessionSettings {
+    const s = this.get(chatId);
+    s.settings = { ...s.settings, ...patch };
+    s.version++;
+    return s.settings;
+  }
+
   setSession(chatId: number, vibe: string, durationMinutes: number): void {
     const s = this.get(chatId);
     s.sessionVibe = vibe;
@@ -169,10 +275,12 @@ export class StreamQueues {
     this.map.set(chatId, {
       state: "idle",
       queue: [],
+      history: [],
       current: null,
       version: prev.version + 1,
       loopMode: prev.loopMode,
       volume: prev.volume,
+      settings: { ...prev.settings },
     });
   }
 }

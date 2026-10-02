@@ -11,14 +11,25 @@ import { Sender } from "../telegram/sender.js";
 import { buildCmd, type StreamEvt, type StreamTrack } from "../stream/contract.js";
 import { StreamQueues, type QueuedTrack } from "../stream/queue.js";
 import type { StreamBus } from "../stream/bus.js";
-import { renderLiveCard, renderLiveCardRich, renderQueue, renderStreamConnectingRich } from "./stream-ui.js";
+import {
+  renderLiveCard,
+  renderLiveCardRich,
+  renderQueue,
+  renderStreamConnectingRich,
+  renderQueueRich,
+  renderDetailsRich,
+  renderLyricsRich,
+  renderStreamSettingsRich,
+  renderVcEndedRich,
+  type LiveCardData,
+} from "./stream-ui.js";
 import { resolveFullTrack } from "../stream/full-audio.js";
 import { RichMessageBuilder } from "../ui/rich-components.js";
 import { packCb, type KbButton } from "../ui/components.js";
 
 const ADMINS = new Set(["creator", "administrator"]);
 
-export type ButtonResult = "ok" | "stale" | "denied" | "idle";
+export type ButtonResult = "ok" | "stale" | "denied" | "idle" | "debounced";
 
 async function msgId(p: Promise<unknown>): Promise<number> {
   const r = (await p) as { message_id?: unknown };
@@ -256,23 +267,53 @@ export class StreamFlow {
     return (await this.bus.heartbeat()) !== null;
   }
 
-  private card(chatId: number, locale: string) {
+  private actionLocks = new Map<string, number>();
+
+  private acquireLock(chatId: number, action: string, lockMs = 1200): boolean {
+    const key = `${chatId}:${action}`;
+    const now = Date.now();
+    const last = this.actionLocks.get(key) || 0;
+    if (now - last < lockMs) {
+      return false;
+    }
+    this.actionLocks.set(key, now);
+    return true;
+  }
+
+  buildCardData(chatId: number): LiveCardData {
     const s = this.queues.get(chatId);
-    return renderLiveCard(
-      {
-        state: s.state,
-        title: s.current?.title ?? null,
-        performer: s.current?.performer ?? null,
-        queueLen: s.queue.length,
-        version: s.version,
-        loopMode: s.loopMode,
-        volume: s.volume,
-        sessionRemainingMinutes: this.queues.getSessionRemainingMinutes(chatId),
-        sessionVibe: s.sessionVibe,
-        duration: s.current?.duration ?? undefined,
-      },
-      locale,
-    );
+    const elapsed = this.queues.getElapsedSeconds(chatId);
+    const duration = s.current?.duration;
+    let stateLabel = "Playing";
+    if (s.state === "paused") stateLabel = "Paused";
+    else if (s.state === "buffering") stateLabel = "Buffering";
+    else if (s.state === "starting") stateLabel = "Starting";
+    else if (s.state === "switching") stateLabel = "Switching Track";
+    else if (s.state === "recovering") stateLabel = "Recovering";
+    else if (s.state === "vc_ended") stateLabel = "Voice Chat Ended";
+    else if (s.state === "stopping") stateLabel = "Stopping";
+
+    return {
+      state: s.state,
+      title: s.current?.title ?? null,
+      performer: s.current?.performer ?? null,
+      album: s.current?.album ?? null,
+      artworkUrl: s.current?.artworkUrl ?? null,
+      queueLen: s.queue.length,
+      version: s.version,
+      loopMode: s.loopMode,
+      volume: s.volume,
+      sessionRemainingMinutes: this.queues.getSessionRemainingMinutes(chatId),
+      sessionVibe: s.sessionVibe,
+      duration: duration ?? undefined,
+      elapsedSeconds: elapsed,
+      stateLabel,
+    };
+  }
+
+  private card(chatId: number, locale: string) {
+    const cardData = this.buildCardData(chatId);
+    return renderLiveCard(cardData, locale);
   }
 
   private showingCard = new Set<number>();
@@ -282,18 +323,7 @@ export class StreamFlow {
     this.showingCard.add(chatId);
     try {
       const s = this.queues.get(chatId);
-      const cardData = {
-        state: s.state,
-        title: s.current?.title ?? null,
-        performer: s.current?.performer ?? null,
-        queueLen: s.queue.length,
-        version: s.version,
-        loopMode: s.loopMode,
-        volume: s.volume,
-        sessionRemainingMinutes: this.queues.getSessionRemainingMinutes(chatId),
-        sessionVibe: s.sessionVibe,
-        duration: s.current?.duration ?? undefined,
-      };
+      const cardData = this.buildCardData(chatId);
       const rich = renderLiveCardRich(cardData, locale);
       const fb = this.card(chatId, locale);
 
@@ -319,7 +349,9 @@ export class StreamFlow {
                 .catch(() => this.sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive")),
             );
             this.queues.setLiveCard(chatId, { chatId, messageId: id });
-            await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
+            if (s.settings.pinPlayerCard) {
+              await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
+            }
           }
         }
       } else {
@@ -329,7 +361,9 @@ export class StreamFlow {
             .catch(() => this.sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive")),
         );
         this.queues.setLiveCard(chatId, { chatId, messageId: id });
-        await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
+        if (s.settings.pinPlayerCard) {
+          await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: id, disable_notification: true }, "control").catch(() => {});
+        }
       }
     } finally {
       this.showingCard.delete(chatId);
@@ -451,12 +485,15 @@ export class StreamFlow {
       let title = "Direct Stream";
       let performer: string | undefined = undefined;
       let duration: number | undefined = undefined;
+      let artworkUrl: string | undefined = undefined;
+      let album: string | undefined = undefined;
 
       try {
         const { manifest } = await this.manager.resolve(q);
         title = manifest.title || title;
         performer = manifest.author || undefined;
         duration = manifest.duration ?? undefined;
+        artworkUrl = manifest.thumbnail || undefined;
         if (isVideo) {
           resolvedMediaUrl = manifest.media.find((x) => x.type === "video" || x.hasVideo)?.url ?? null;
         } else {
@@ -473,6 +510,8 @@ export class StreamFlow {
           title = full.title || title;
           performer = full.author;
           duration = full.duration;
+          artworkUrl = full.thumbnail;
+          album = full.album;
         }
       }
 
@@ -484,6 +523,8 @@ export class StreamFlow {
       track = {
         title,
         performer,
+        album,
+        artworkUrl,
         pageUrl: q,
         mediaUrl: resolvedMediaUrl,
         duration,
@@ -513,6 +554,8 @@ export class StreamFlow {
           track = {
             title: full.title,
             performer: full.author,
+            album: full.album,
+            artworkUrl: full.thumbnail,
             pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(q)}`,
             mediaUrl: full.url,
             duration: full.duration,
@@ -654,6 +697,8 @@ export class StreamFlow {
           const directTrack: QueuedTrack = {
             title: full.title,
             performer: full.author,
+            album: full.album,
+            artworkUrl: full.thumbnail,
             pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(s.sessionVibe)}`,
             mediaUrl: full.url,
             duration: full.duration,
@@ -663,6 +708,31 @@ export class StreamFlow {
           s.current = directTrack;
           return this.playTrackItem(chatId, directTrack, locale);
         }
+      }
+
+      if (!s.settings.autoLeaveOnFinish) {
+        this.queues.setState(chatId, "idle");
+        const msgId = s.liveCard?.messageId;
+        if (msgId) {
+          const builder = new RichMessageBuilder()
+            .heading(2, "📻 QUEUE FINISHED — IDLE IN CALL")
+            .divider()
+            .paragraph("All queued tracks have concluded.")
+            .paragraph(`Assistant @${this.assistantUsername} is still active in the voice chat ready for new tracks.`)
+            .paragraph("Tap **➕ Add Song** or send `/play <query>` to continue streaming.")
+            .footer("PAPPY Media · Continuous Stream Gateway");
+          const rich = builder.build();
+          const rows: KbButton[][] = [
+            [{ text: "➕ Add Song", callback_data: packCb("sad", "now", s.version), style: "success" }],
+            [{ text: "⏹ Stop & Leave", callback_data: packCb("sx", "now", s.version), style: "danger" }],
+          ];
+          await this.sender.enqueue(
+            "editMessageText",
+            { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: { inline_keyboard: rows } },
+            "interactive",
+          ).catch(() => {});
+        }
+        return;
       }
 
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
@@ -715,6 +785,7 @@ export class StreamFlow {
           mediaUrl = manifest.media.find((x) => x.type === "audio" || x.hasAudio)?.url ?? null;
         }
         if (manifest.duration) duration = manifest.duration;
+        if (manifest.thumbnail && !next.artworkUrl) next.artworkUrl = manifest.thumbnail;
       } catch (e) {
         this.log.warn("stream resolve failed", { error: (e as Error).message });
       }
@@ -727,6 +798,8 @@ export class StreamFlow {
         if (full?.url) {
           mediaUrl = full.url;
           if (full.duration) duration = full.duration;
+          if (full.thumbnail && !next.artworkUrl) next.artworkUrl = full.thumbnail;
+          if (full.album && !next.album) next.album = full.album;
         }
       }
     }
@@ -736,6 +809,10 @@ export class StreamFlow {
       await this.startNext(chatId, locale, false); // skip dud, keep stream alive
       return;
     }
+
+    next.mediaUrl = mediaUrl;
+    if (duration) next.duration = duration;
+    this.queues.setCurrentStarted(chatId);
 
     // Stage 2: Connecting to voice chat
     await this.sendProgressStage(chatId, 2, next.title, {
@@ -806,6 +883,8 @@ export class StreamFlow {
       this.queues.enqueue(chatId, {
         title: headTrack.title,
         performer: headTrack.author,
+        album: headTrack.album,
+        artworkUrl: headTrack.thumbnail,
         pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(vibe)}`,
         mediaUrl: headTrack.url,
         duration: headTrack.duration,
@@ -954,6 +1033,7 @@ export class StreamFlow {
   async buttonPause(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "pause", 1000)) return "debounced";
     const s = this.queues.get(chatId);
     if (s.state === "idle") return "idle";
     await this.bus.publish(buildCmd("stream.pause", chatId)).catch(() => {});
@@ -965,6 +1045,7 @@ export class StreamFlow {
   async buttonResume(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "resume", 1000)) return "debounced";
     const s = this.queues.get(chatId);
     if (s.state === "idle") return "idle";
     await this.bus.publish(buildCmd("stream.resume", chatId)).catch(() => {});
@@ -976,14 +1057,37 @@ export class StreamFlow {
   async buttonSkip(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "skip", 1200)) return "debounced";
     const s = this.queues.get(chatId);
     if (s.state === "idle") return "idle";
+    this.queues.setState(chatId, "switching");
     await this.startNext(chatId, locale, false);
+    return "ok";
+  }
+
+  async buttonPrevious(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "prev", 1200)) return "debounced";
+    const s = this.queues.get(chatId);
+    if (s.state === "idle") return "idle";
+    const prev = this.queues.popHistory(chatId);
+    if (!prev) {
+      if (s.current) {
+        await this.playTrackItem(chatId, s.current, locale);
+        return "ok";
+      }
+      return "idle";
+    }
+    this.queues.setState(chatId, "switching");
+    await this.playTrackItem(chatId, prev, locale);
     return "ok";
   }
 
   async buttonStop(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "stop", 2000)) return "debounced";
+    this.queues.setState(chatId, "stopping");
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
     const s = this.queues.get(chatId);
     const msgId = s.liveCard?.messageId;
@@ -1019,6 +1123,7 @@ export class StreamFlow {
   async buttonVolume(chatId: number, userId: number, target: string, delta = 0, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "vol", 300)) return "debounced";
     const nextVol = delta !== 0 ? this.queues.adjustVolume(chatId, delta) : this.queues.cycleVolume(chatId);
     const s = this.queues.get(chatId);
     if (s.state !== "idle") {
@@ -1031,6 +1136,7 @@ export class StreamFlow {
   async buttonLoop(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "loop", 600)) return "debounced";
     this.queues.cycleLoopMode(chatId);
     await this.showCard(chatId, locale);
     return "ok";
@@ -1039,6 +1145,157 @@ export class StreamFlow {
   async buttonQueue(chatId: number, target: string, locale = "en", userId?: number): Promise<ButtonResult> {
     if (userId !== undefined && !(await this.isAdmin(chatId, userId))) return "denied";
     await this.viewQueue(chatId, locale);
+    return "ok";
+  }
+
+  async buttonQueueDeck(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    const s = this.queues.get(chatId);
+    const cardData = this.buildCardData(chatId);
+    const rich = renderQueueRich(cardData, s.current, s.queue, locale);
+    if (s.liveCard?.messageId) {
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: s.liveCard.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+        "interactive",
+      ).catch(async () => {
+        await this.sender.enqueue(
+          "sendMessage",
+          { chat_id: chatId, text: renderQueue(s.current, s.queue, locale), parse_mode: "Markdown" },
+          "interactive",
+        );
+      });
+    } else {
+      await this.viewQueue(chatId, locale);
+    }
+    return "ok";
+  }
+
+  async buttonShuffle(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "shuffle", 800)) return "debounced";
+    this.queues.shuffle(chatId);
+    await this.showCard(chatId, locale);
+    return "ok";
+  }
+
+  async buttonClearQueue(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    if (!this.acquireLock(chatId, "clear", 1000)) return "debounced";
+    this.queues.clearQueue(chatId);
+    await this.showCard(chatId, locale);
+    return "ok";
+  }
+
+  async buttonRefresh(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!this.acquireLock(chatId, "refresh", 500)) return "debounced";
+    await this.showCard(chatId, locale);
+    return "ok";
+  }
+
+  async buttonDetails(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    const s = this.queues.get(chatId);
+    const cardData = this.buildCardData(chatId);
+    const rich = renderDetailsRich(cardData, s.current, locale);
+    if (s.liveCard?.messageId) {
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: s.liveCard.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+        "interactive",
+      ).catch(() => {});
+    }
+    return "ok";
+  }
+
+  async buttonLyrics(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    const s = this.queues.get(chatId);
+    const cardData = this.buildCardData(chatId);
+    const lyricsText =
+      s.current?.lyrics ||
+      (s.current?.title
+        ? `🎵 Lyrics for "${s.current.title}":\n\nNo synchronized lyrics text was retrieved from the stream provider.\nEnjoy the lossless live audio stream!`
+        : "No track is currently playing.");
+    const rich = renderLyricsRich(cardData, lyricsText, locale);
+    if (s.liveCard?.messageId) {
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: s.liveCard.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+        "interactive",
+      ).catch(() => {});
+    }
+    return "ok";
+  }
+
+  async buttonSettings(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    const s = this.queues.get(chatId);
+    const cardData = this.buildCardData(chatId);
+    const rich = renderStreamSettingsRich(cardData, s.settings, locale);
+    if (s.liveCard?.messageId) {
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: s.liveCard.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+        "interactive",
+      ).catch(() => {});
+    }
+    return "ok";
+  }
+
+  async buttonSettingToggle(chatId: number, userId: number, key: string, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    const s = this.queues.get(chatId);
+    if (key === "leave") {
+      this.queues.updateSettings(chatId, { autoLeaveOnFinish: !s.settings.autoLeaveOnFinish });
+    } else if (key === "pin") {
+      this.queues.updateSettings(chatId, { pinPlayerCard: !s.settings.pinPlayerCard });
+    } else if (key === "qual") {
+      const cur = s.settings.audioQuality;
+      const next = cur === "lossless" ? "high" : cur === "high" ? "standard" : "lossless";
+      this.queues.updateSettings(chatId, { audioQuality: next });
+    } else if (key === "boost") {
+      this.queues.updateSettings(chatId, { speakerBoost: !s.settings.speakerBoost });
+    }
+    return this.buttonSettings(chatId, userId, target, locale);
+  }
+
+  async buttonDownload(chatId: number, userId: number, target: string, locale = "en"): Promise<{ result: ButtonResult; trackTitle?: string }> {
+    if (!this.check(target, chatId)) return { result: "stale" };
+    const s = this.queues.get(chatId);
+    if (!s.current) return { result: "idle" };
+    const track = s.current;
+    const url = track.pageUrl || `https://music.youtube.com/search?q=${encodeURIComponent(track.title)}`;
+    await this.sender.enqueue(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: `⬇️ *Download Track:*\n\n[${track.title}](${url})\n👤 Artist: ${track.performer || "Unknown"}\n\n_Tap the link above to download or stream the source master file._`,
+        parse_mode: "Markdown",
+        disable_web_page_preview: false,
+      },
+      "interactive",
+    );
+    return { result: "ok", trackTitle: track.title };
+  }
+
+  async buttonAddPrompt(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+    if (!this.check(target, chatId)) return "stale";
+    if (!(await this.isAdmin(chatId, userId))) return "denied";
+    await this.sender.enqueue(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: `➕ *Add Song to Stream Queue*\n\nSend \`/play <song name or link>\` in this chat to add tracks to the queue seamlessly!`,
+        parse_mode: "Markdown",
+      },
+      "interactive",
+    );
     return "ok";
   }
 
@@ -1058,11 +1315,13 @@ export class StreamFlow {
         break;
       case "track.started":
         this.queues.setState(chatId, "live");
+        this.queues.setCurrentStarted(chatId);
         await this.showCard(chatId, locale);
         this.preResolveQueue(chatId).catch(() => {});
         break;
       case "track.ended":
         if (s.state === "idle" && !this.queues.isSessionActive(chatId)) return;
+        this.queues.setState(chatId, "switching");
         await this.startNext(chatId, locale, true);
         break;
       case "paused":
@@ -1073,21 +1332,32 @@ export class StreamFlow {
         this.queues.setState(chatId, "live");
         await this.showCard(chatId, locale);
         break;
-      case "call.left":
+      case "call.left": {
+        this.log.info("Voice chat concluded / assistant disconnected", { chatId });
+        this.queues.setState(chatId, "vc_ended");
+        const msgId = s.liveCard?.messageId;
+        const currentTitle = s.current?.title;
         await this.unpinLiveCard(chatId);
-        if (s.state !== "idle" && !this.queues.isSessionActive(chatId)) {
-          this.queues.reset(chatId);
+        this.queues.reset(chatId);
+        if (msgId) {
+          const rich = renderVcEndedRich(currentTitle, locale);
+          await this.sender.enqueue(
+            "editMessageText",
+            { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: rich.reply_markup },
+            "interactive",
+          ).catch(() => {});
         }
         break;
+      }
       case "error":
         this.log.warn("worker error", { chatId, code: evt.error?.code, message: evt.error?.message });
         if (this.queues.isSessionActive(chatId)) {
-          // If session is active, try advancing to next track instead of killing session
+          this.queues.setState(chatId, "recovering");
           await this.startNext(chatId, locale, false);
         } else {
+          this.queues.setState(chatId, "failed");
           await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
           await this.unpinLiveCard(chatId);
-          this.queues.setState(chatId, "idle");
           this.queues.reset(chatId);
           await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.error", { e: evt.error?.message ?? "unknown" }, locale) }, "interactive");
         }

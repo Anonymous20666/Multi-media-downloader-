@@ -7,6 +7,17 @@ import type { StreamCmd, StreamEvt, StreamHeartbeat } from "../stream/contract.j
 import type { StreamBus } from "../stream/bus.js";
 import { StreamQueues } from "../stream/queue.js";
 import { StreamFlow } from "./stream.js";
+import {
+  buildLiveDeckButtons,
+  renderLiveCard,
+  renderLiveCardRich,
+  renderProgressBar,
+  formatDuration,
+  renderQueueRich,
+  renderDetailsRich,
+  renderStreamSettingsRich,
+  renderVcEndedRich,
+} from "./stream-ui.js";
 
 function harness(opts: { alive?: boolean; admins?: number[] } = {}) {
   const calls: Array<{ method: string; text: string; kb: string }> = [];
@@ -168,4 +179,144 @@ test("stream volume and loop controls: command and button interactions", async (
   assert.equal(await h.flow.buttonQueue(-100, `v${v3}`), "ok");
   assert.match(h.calls[h.calls.length - 1].text, /Queue/);
 });
+
+test("stream UI rendering: deck matrix, progress bar, artwork banner", () => {
+  assert.equal(formatDuration(0), "00:00");
+  assert.equal(formatDuration(161), "02:41");
+  assert.equal(formatDuration(198), "03:18");
+
+  const pBar = renderProgressBar(161, 198, 12);
+  assert.match(pBar, /█+/);
+  assert.match(pBar, /░+/);
+
+  const btns = buildLiveDeckButtons({
+    state: "live",
+    title: "Test Track",
+    performer: "Artist",
+    album: "Album",
+    artworkUrl: "https://example.com/cover.jpg",
+    queueLen: 3,
+    version: 5,
+    loopMode: "off",
+    volume: 100,
+    duration: 198,
+    elapsedSeconds: 161,
+  });
+
+  // Verify 6-row layout
+  assert.equal(btns.length, 6);
+  // Row 1: Previous, Pause, Next
+  assert.equal(btns[0].length, 3);
+  assert.match(btns[0][0].text, /Previous/);
+  assert.match(btns[0][1].text, /Pause/);
+  assert.match(btns[0][2].text, /Next/);
+  // Row 2: Shuffle, Repeat
+  assert.equal(btns[1].length, 2);
+  assert.match(btns[1][0].text, /Shuffle/);
+  assert.match(btns[1][1].text, /Repeat/);
+  // Row 3: Add, Queue
+  assert.equal(btns[2].length, 2);
+  assert.match(btns[2][0].text, /Add/);
+  assert.match(btns[2][1].text, /Queue \(3\)/);
+  // Row 4: Download, Lyrics
+  assert.equal(btns[3].length, 2);
+  assert.match(btns[3][0].text, /Download/);
+  assert.match(btns[3][1].text, /Lyrics/);
+  // Row 5: Details, Settings
+  assert.equal(btns[4].length, 2);
+  assert.match(btns[4][0].text, /Details/);
+  assert.match(btns[4][1].text, /Settings/);
+  // Row 6: Stop, Refresh
+  assert.equal(btns[5].length, 2);
+  assert.match(btns[5][0].text, /Stop/);
+  assert.match(btns[5][1].text, /Refresh/);
+
+  // Markdown fallback contains photo zero-width link
+  const fb = renderLiveCard({
+    state: "live",
+    title: "Test Track",
+    performer: "Artist",
+    album: "Album",
+    artworkUrl: "https://example.com/cover.jpg",
+    queueLen: 3,
+    version: 5,
+    duration: 198,
+    elapsedSeconds: 161,
+  });
+  assert.match(fb.text, /https:\/\/example\.com\/cover\.jpg/);
+  assert.match(fb.text, /02:41 \/ 03:18/);
+  assert.match(fb.text, /NOW PLAYING/);
+
+  // Bot API 10.3 Rich payload
+  const rich = renderLiveCardRich({
+    state: "live",
+    title: "Test Track",
+    performer: "Artist",
+    album: "Album",
+    artworkUrl: "https://example.com/cover.jpg",
+    queueLen: 3,
+    version: 5,
+    duration: 198,
+    elapsedSeconds: 161,
+  });
+  assert.ok(rich.rich_message);
+});
+
+test("stream buttons: previous, shuffle, clear queue, settings toggle, debouncing", async () => {
+  const h = harness();
+  await h.flow.play(-100, 1, "track1", "supergroup");
+  await h.flow.play(-100, 1, "track2", "supergroup");
+  await h.flow.play(-100, 1, "track3", "supergroup");
+
+  const v = h.queues.get(-100).version;
+
+  // Shuffle queue
+  const shufRes = await h.flow.buttonShuffle(-100, 1, `v${v}`);
+  assert.equal(shufRes, "ok");
+
+  // Debouncing test: immediate repeat action is debounced
+  const debounced = await h.flow.buttonShuffle(-100, 1, `v${v}`);
+  assert.equal(debounced, "debounced");
+
+  // Advance to track 2
+  await h.flow.onEvent(h.evt("track.ended"));
+  assert.equal(h.queues.get(-100).history.length, 1);
+
+  // Button previous takes track from history
+  const prevRes = await h.flow.buttonPrevious(-100, 1, `v${v}`);
+  assert.equal(prevRes, "ok");
+
+  // Settings toggle
+  const setRes = await h.flow.buttonSettingToggle(-100, 1, "leave", `v${v}`);
+  assert.equal(setRes, "ok");
+  assert.equal(h.queues.get(-100).settings.autoLeaveOnFinish, false);
+
+  const boostRes = await h.flow.buttonSettingToggle(-100, 1, "boost", `v${v}`);
+  assert.equal(boostRes, "ok");
+  assert.equal(h.queues.get(-100).settings.speakerBoost, false);
+
+  // Clear queue
+  const clrRes = await h.flow.buttonClearQueue(-100, 1, `v${v}`);
+  assert.equal(clrRes, "ok");
+  assert.equal(h.queues.get(-100).queue.length, 0);
+});
+
+test("stream VC ended: call.left transitions to vc_ended, cleans up and edits deck", async () => {
+  const h = harness();
+  await h.flow.play(-100, 1, "lithe", "supergroup");
+  await h.flow.onEvent(h.evt("track.started"));
+  assert.equal(h.queues.get(-100).state, "live");
+
+  // Admin closes the voice chat in Telegram -> PyTgCalls emits call.left
+  await h.flow.onEvent(h.evt("call.left"));
+
+  // State should be reset and session cleaned up
+  assert.equal(h.queues.get(-100).state, "idle");
+  assert.equal(h.queues.isSessionActive(-100), false);
+  // Voice chat concluded message rendered
+  const lastEdit = h.calls.filter((c) => c.method === "editMessageText").pop();
+  assert.ok(lastEdit);
+  assert.match(lastEdit.text, /VOICE CHAT CONCLUDED/);
+});
+
 

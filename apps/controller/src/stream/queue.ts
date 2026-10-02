@@ -25,6 +25,9 @@ export interface ChatStream {
   version: number;
   loopMode: LoopMode;
   volume: number;
+  sessionEndTime?: number;
+  sessionVibe?: string;
+  sessionDurationMinutes?: number;
 }
 
 export const MAX_QUEUE = 50;
@@ -128,6 +131,19 @@ export class StreamQueues {
     s.volume = Math.max(0, Math.min(200, Math.round(s.volume + delta)));
     s.version++;
     return s.volume;
+  }
+
+  setSession(chatId: number, vibe: string, durationMinutes: number): void {
+    const s = this.get(chatId);
+    s.sessionVibe = vibe;
+    s.sessionDurationMinutes = durationMinutes;
+    s.sessionEndTime = Date.now() + durationMinutes * 60_000;
+    s.version++;
+  }
+
+  isSessionActive(chatId: number): boolean {
+    const s = this.get(chatId);
+    return typeof s.sessionEndTime === "number" && Date.now() < s.sessionEndTime;
   }
 
   reset(chatId: number): void {

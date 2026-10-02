@@ -33,7 +33,7 @@ test("group menu rich payload uses verified Bot API 10.3 blocks and exposes full
 
   // Verify keyboard actions
   const kb = menu.reply_markup.inline_keyboard;
-  assert.equal(kb.length, 3, "must have 3 rows of actions");
+  assert.ok(kb.length >= 3, "must have at least 3 rows of actions");
   const flatCallbacks = kb.flat().map((btn) => btn.callback_data ?? "");
   assert.ok(flatCallbacks.some((cb) => cb.includes("v1.gm.play.")), "must have Play action");
   assert.ok(flatCallbacks.some((cb) => cb.includes("v1.gm.movies.")), "must have Movies action");

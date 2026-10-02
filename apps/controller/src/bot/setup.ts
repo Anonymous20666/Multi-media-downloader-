@@ -620,6 +620,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           const r = await flows.stream.buttonVolume(chatId, userId, parsed.target, delta);
           if (r === "stale") await toast(t("stream.stale"));
           else if (r === "denied") await toast(t("stream.need_admin"), true);
+          else await toast(`🔊 Volume: ${flows.stream.getVolume(chatId)}%`);
           break;
         }
         case "sqe": {
@@ -877,7 +878,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           const rich = renderWizardConnecting(vibe, session.durationLabel);
           await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
           wizardRegistry.delete(sid);
-          await flows.stream.play(chatId, userId, vibe, ctx.chat?.type ?? "supergroup", "en", false);
+          await flows.stream.playSession(chatId, userId, vibe, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false);
           break;
         }
         case "swcv": {
@@ -915,7 +916,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           const rich = renderWizardConnecting(category, "Movie Runtime");
           await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
           wizardRegistry.delete(sid);
-          await flows.stream.play(chatId, userId, category, ctx.chat?.type ?? "supergroup", "en", true);
+          await flows.stream.playSession(chatId, userId, category, 120, ctx.chat?.type ?? "supergroup", "en", true);
           break;
         }
         case "swcm": {
@@ -1033,7 +1034,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         const rich = renderWizardConnecting(text, session.durationLabel);
         await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
         wizardRegistry.delete(session.id);
-        await flows.stream.play(ctx.chatId, ctx.from.id, text, ctx.chat?.type ?? "supergroup", "en", false);
+        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false);
         return;
       }
       if (session?.waitingCustomMovie) {
@@ -1042,7 +1043,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         const rich = renderWizardConnecting(text, "Movie Runtime");
         await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
         wizardRegistry.delete(session.id);
-        await flows.stream.play(ctx.chatId, ctx.from.id, text, ctx.chat?.type ?? "supergroup", "en", true);
+        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, 120, ctx.chat?.type ?? "supergroup", "en", true);
         return;
       }
 

@@ -347,16 +347,67 @@ export class StreamFlow {
     await this.sender.enqueue("unpinChatMessage", { chat_id: chatId }, "control").catch(() => {});
   }
 
+  /** Auto-replenish session tracks so continuous streaming persists for the full duration. */
+  async replenishSessionTracks(chatId: number, vibe: string): Promise<void> {
+    try {
+      const searchTerms = [
+        vibe,
+        `${vibe} popular`,
+        `${vibe} hits`,
+        `${vibe} radio`,
+      ];
+      const term = searchTerms[Math.floor(Math.random() * searchTerms.length)] ?? vibe;
+      const res = await this.manager.searchMusic(term, 10);
+      const s = this.queues.get(chatId);
+      for (const item of res.items) {
+        if (!item.title) continue;
+        const exists = s.queue.some((q) => q.title.toLowerCase() === item.title.toLowerCase()) ||
+          (s.current?.title.toLowerCase() === item.title.toLowerCase());
+        if (!exists) {
+          this.queues.enqueue(chatId, {
+            title: item.title,
+            performer: item.author ?? undefined,
+            pageUrl: item.pageUrl ?? item.previewUrl ?? "",
+            duration: item.duration ?? undefined,
+            addedBy: 0,
+            isVideo: false,
+          });
+        }
+      }
+    } catch (e) {
+      this.log.warn("session auto-replenish failed", { error: (e as Error).message });
+    }
+  }
+
   /** Resolve the head of the queue fresh and tell the worker to play it. */
   private async startNext(chatId: number, locale: string, naturalEnd = false): Promise<void> {
+    const s = this.queues.get(chatId);
+
+    // Auto-replenish if session is active and queue is running low:
+    if (this.queues.isSessionActive(chatId) && s.queue.length <= 1 && s.sessionVibe) {
+      await this.replenishSessionTracks(chatId, s.sessionVibe).catch(() => {});
+    }
+
     const next = this.queues.advance(chatId, { naturalEnd });
     if (!next) {
+      // If session is still active, try one more replenishment before giving up:
+      if (this.queues.isSessionActive(chatId) && s.sessionVibe) {
+        await this.replenishSessionTracks(chatId, s.sessionVibe).catch(() => {});
+        const retryNext = this.queues.advance(chatId, { naturalEnd });
+        if (retryNext) {
+          return this.playTrackItem(chatId, retryNext, locale);
+        }
+      }
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
       await this.unpinLiveCard(chatId);
       this.queues.reset(chatId);
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.drained", {}, locale) }, "interactive");
       return;
     }
+    await this.playTrackItem(chatId, next, locale);
+  }
+
+  private async playTrackItem(chatId: number, next: QueuedTrack, locale: string): Promise<void> {
     let mediaUrl: string | null = next.mediaUrl ?? null;
     let duration: number | null = next.duration ?? null;
 
@@ -390,10 +441,69 @@ export class StreamFlow {
       await this.startNext(chatId, locale, false); // skip the dud, keep the party going
       return;
     }
-    const track: StreamTrack = { title: next.title, performer: next.performer ?? null, url: mediaUrl, duration: next.duration ?? null, isVideo: next.isVideo };
+    const track: StreamTrack = { title: next.title, performer: next.performer ?? null, url: mediaUrl, duration: duration ?? next.duration ?? null, isVideo: next.isVideo };
     this.queues.setState(chatId, "starting");
     await this.showCard(chatId, locale);
     await this.bus.publish(buildCmd("stream.play", chatId, { track }));
+  }
+
+  /** Start a continuous radio session for the selected duration (in minutes). */
+  async playSession(
+    chatId: number,
+    userId: number,
+    vibe: string,
+    durationMinutes: number,
+    chatType: string,
+    locale = "en",
+    isVideo = false,
+  ): Promise<void> {
+    const isGroup = chatType === "group" || chatType === "supergroup";
+    if (!isGroup) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.dm", {}, locale) }, "interactive");
+      return;
+    }
+    const asst = await this.ensureAssistantReady(chatId);
+    if (!asst.ok) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: asst.reason!, parse_mode: "Markdown" }, "interactive");
+      return;
+    }
+    if (!(await this.isAdmin(chatId, userId))) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
+      return;
+    }
+    if (!(await this.workerAlive())) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.offline", {}, locale) }, "interactive");
+      return;
+    }
+
+    this.queues.setSession(chatId, vibe, durationMinutes);
+    await this.replenishSessionTracks(chatId, vibe);
+
+    const s = this.queues.get(chatId);
+    if (s.queue.length === 0) {
+      const full = await resolveFullTrack(vibe, isVideo);
+      if (full?.url) {
+        this.queues.enqueue(chatId, {
+          title: full.title,
+          performer: full.author,
+          pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(vibe)}`,
+          mediaUrl: full.url,
+          duration: full.duration,
+          addedBy: userId,
+          isVideo,
+        });
+      }
+    }
+
+    if (s.state === "idle") {
+      await this.startNext(chatId, locale);
+    } else {
+      await this.showCard(chatId, locale);
+    }
+  }
+
+  getVolume(chatId: number): number {
+    return this.queues.get(chatId).volume;
   }
 
   /** /skip — admins only. */

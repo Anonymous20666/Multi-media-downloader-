@@ -26,67 +26,78 @@ export function renderGroupMenuRich(chatTitle: string, locale = "en"): GroupMenu
 
   const rows: KbButton[][] = [
     [
-      { text: "🎵 Play Music", callback_data: packCb("gm", "play", 1), style: "success" },
-      { text: "🎬 Movies & Series", callback_data: packCb("gm", "movies", 1), style: "primary" },
-    ],
-    [
+      { text: "🎵 Music", callback_data: packCb("gm", "play", 1), style: "primary" },
       { text: "📡 Stream in VC", callback_data: packCb("gm", "stream", 1), style: "primary" },
-      { text: "🎞 Shorts & Reels", callback_data: packCb("gm", "shorts", 1), style: "default" },
     ],
     [
-      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1), style: "default" },
+      { text: "🎬 Cinema", callback_data: packCb("gm", "movies", 1), style: "primary" },
+      { text: "🎞 Shorts", callback_data: packCb("gm", "shorts", 1), style: "primary" },
+    ],
+    [
+      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1), style: "primary" },
+      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1), style: "primary" },
+    ],
+    [
+      { text: "🔉 Vol -10%", callback_data: packCb("svd", "v0", 1), style: "default" },
+      { text: "🔊 Vol +10%", callback_data: packCb("svu", "v0", 1), style: "default" },
+    ],
+    [
       { text: "⏹ Stop", callback_data: packCb("gm", "stop_stream", 1), style: "danger" },
-      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1), style: "default" },
+      { text: "🔄 Refresh", callback_data: packCb("gm", "refresh", 1), style: "default" },
     ],
   ];
 
   const builder = new RichMessageBuilder()
-    .heading(2, `⸸ ${safeTitle.toUpperCase()} // SMART DECK`)
+    .heading(2, `⸸ ${safeTitle.toUpperCase()}`)
+    .paragraph("Private Publishing & Streaming Console")
     .divider()
-    .paragraph(
-      "High-density group media deck powered by Pappy/Omega. Search lossless tracks, stream cinema in group calls, and download full-res media simultaneously.",
-    )
+    .heading(4, "⚙️ System status")
     .table(
       [
         [
-          { text: "Feature", is_header: true, align: "center", valign: "middle" },
-          { text: "Quality", is_header: true, align: "center", valign: "middle" },
-          { text: "Group Actions", is_header: true, align: "center", valign: "middle" },
+          { text: "Music", is_header: true, align: "left", valign: "middle" },
+          { text: "LOSSLESS · ONLINE", align: "left", valign: "middle" },
         ],
         [
-          { text: "🎵 Music", align: "left", valign: "middle" },
-          { text: "FLAC / 320k", align: "left", valign: "middle" },
-          { text: "Search · Queue · DL", align: "left", valign: "middle" },
+          { text: "Cinema", align: "left", valign: "middle" },
+          { text: "4K / 1080p FHD", align: "left", valign: "middle" },
         ],
         [
-          { text: "🎬 Cinema", align: "left", valign: "middle" },
-          { text: "4K / 1080p", align: "left", valign: "middle" },
-          { text: "Trailers · Full Films", align: "left", valign: "middle" },
+          { text: "Live VC", align: "left", valign: "middle" },
+          { text: "24/7 WebRTC Radio", align: "left", valign: "middle" },
         ],
         [
-          { text: "📡 Live VC", align: "left", valign: "middle" },
-          { text: "WebRTC 24/7", align: "left", valign: "middle" },
-          { text: "Voice Chat Radio & Video", align: "left", valign: "middle" },
+          { text: "Shorts", align: "left", valign: "middle" },
+          { text: "Original Clean MP4", align: "left", valign: "middle" },
         ],
         [
-          { text: "🎞 Shorts", align: "left", valign: "middle" },
-          { text: "Original MP4", align: "left", valign: "middle" },
-          { text: "Reels · TikToks · Clips", align: "left", valign: "middle" },
+          { text: "Audio", align: "left", valign: "middle" },
+          { text: "ENABLED (HQ)", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Stream Deck", align: "left", valign: "middle" },
+          { text: "CONFIGURED", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Jobs recorded", align: "left", valign: "middle" },
+          { text: "0 · 0 failed", align: "left", valign: "middle" },
         ],
       ],
       { is_bordered: true, is_striped: true },
     )
-    .details("🛡 Group Permissions & Quick Rules", [
+    .divider()
+    .details("📋 Sections & Capabilities", [
       {
         type: "paragraph",
-        text: "Voice Chat streaming controls require Group Admin permissions. Any member can search music, request songs, and download files.",
+        text: "• Music — search, queue and full lossless streaming\n• Destinations — preview and voice chat streaming\n• Cinema — 4K movies, anime and trailers\n• Shorts — TikTok, IG and clean clip downloads\n• Queue — live track order & skip\n• Settings — volume, audio engine and deck config\n• Diagnostics — health and worker connection",
       },
       {
         type: "pre",
-        text: "Group Commands:\n• /menu — Open this smart menu\n• /play <song> — Stream or queue music\n• /stream — Launch interactive streaming wizard\n• /queue — Check upcoming tracks\n• /vol <0-200> — Adjust stream volume\n• /skip — Skip current song",
+        text: "Group Commands:\n• /menu — Open this smart deck\n• /play <song> — Stream or queue music\n• /stream — Launch interactive streaming wizard\n• /queue — Check upcoming tracks\n• /vol <0-200> — Adjust stream volume\n• /skip — Skip current song",
         language: "yaml",
       },
-    ]);
+    ])
+    .pullquote("PAPPY Media · owner-only console · credit @holypappy");
 
   const rendered = builder.build();
   return {

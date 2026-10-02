@@ -23,6 +23,13 @@ export function isUpload(v: unknown): v is UploadValue {
 
 /** Split params into JSON body or multipart FormData. Returns headers to merge. */
 export function encodeParams(params: Record<string, unknown>): { multipart: boolean; body: string | FormData } {
+  if (typeof params.rich_message === "string") {
+    try {
+      params = { ...params, rich_message: JSON.parse(params.rich_message as string) };
+    } catch {
+      params = { ...params, rich_message: { html: params.rich_message } };
+    }
+  }
   // Nested uploads (media-group arrays) become attach:// references; top-level
   // uploads keep the original convention (file under its own param key).
   const nested: Array<{ field: string; value: UploadValue }> = [];

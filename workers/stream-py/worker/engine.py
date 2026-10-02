@@ -317,26 +317,28 @@ class PyTgCallsEngine(CallEngine):
         return fresh
 
     def pause(self, chat_id: int) -> None:
-        if chat_id not in self._live:
+        cid = int(chat_id)
+        if cid not in self._live:
             return
         try:
-            if not self._call.pause(chat_id):
-                raise EngineError("PAUSE_FAILED", "engine declined pause")
+            self._call.pause(cid)
         except Exception as e:
-            if "ConnectionNotFound" in type(e).__name__:
+            err = type(e).__name__
+            if "ConnectionNotFound" in err or "NotInCall" in err:
                 return
-            raise
+            return
 
     def resume(self, chat_id: int) -> None:
-        if chat_id not in self._live:
+        cid = int(chat_id)
+        if cid not in self._live:
             return
         try:
-            if not self._call.resume(chat_id):
-                raise EngineError("RESUME_FAILED", "engine declined resume")
+            self._call.resume(cid)
         except Exception as e:
-            if "ConnectionNotFound" in type(e).__name__:
+            err = type(e).__name__
+            if "ConnectionNotFound" in err or "NotInCall" in err:
                 return
-            raise
+            return
 
     def stop(self, chat_id: int) -> None:
         try:

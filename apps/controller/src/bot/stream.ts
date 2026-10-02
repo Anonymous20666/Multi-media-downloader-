@@ -806,8 +806,8 @@ export class StreamFlow {
       }
     }
 
-    if (!mediaUrl) {
-      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_source", {}, locale) }, "interactive");
+    if (!mediaUrl || /AudioPreview|mzaf_|itunes\.apple\.com|mzstatic\.com/i.test(mediaUrl)) {
+      this.log.warn("Track has no full audio stream source — skipping dud", { chatId, title: next.title });
       await this.startNext(chatId, locale, false); // skip dud, keep stream alive
       return;
     }
@@ -1031,11 +1031,14 @@ export class StreamFlow {
   async buttonPause(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
-    if (!this.acquireLock(chatId, "pause", 1000)) return "debounced";
+    if (!this.acquireLock(chatId, "pause", 800)) return "debounced";
     const s = this.queues.get(chatId);
-    if (s.state === "idle") return "idle";
-    await this.bus.publish(buildCmd("stream.pause", chatId)).catch(() => {});
+    if (s.state === "idle" || s.state === "vc_ended" || s.state === "failed") return "idle";
+    if (s.state === "paused") {
+      return this.buttonResume(chatId, userId, target, locale);
+    }
     this.queues.setState(chatId, "paused");
+    await this.bus.publish(buildCmd("stream.pause", chatId)).catch(() => {});
     await this.showCard(chatId, locale);
     return "ok";
   }
@@ -1043,11 +1046,14 @@ export class StreamFlow {
   async buttonResume(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
-    if (!this.acquireLock(chatId, "resume", 1000)) return "debounced";
+    if (!this.acquireLock(chatId, "resume", 800)) return "debounced";
     const s = this.queues.get(chatId);
-    if (s.state === "idle") return "idle";
-    await this.bus.publish(buildCmd("stream.resume", chatId)).catch(() => {});
+    if (s.state === "idle" || s.state === "vc_ended" || s.state === "failed") return "idle";
+    if (s.state === "live") {
+      return "ok";
+    }
     this.queues.setState(chatId, "live");
+    await this.bus.publish(buildCmd("stream.resume", chatId)).catch(() => {});
     await this.showCard(chatId, locale);
     return "ok";
   }
@@ -1055,30 +1061,36 @@ export class StreamFlow {
   async buttonSkip(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
-    if (!this.acquireLock(chatId, "skip", 1200)) return "debounced";
+    if (!this.acquireLock(chatId, "skip", 1000)) return "debounced";
     const s = this.queues.get(chatId);
-    if (s.state === "idle") return "idle";
+    if (s.state === "idle" || s.state === "vc_ended") return "idle";
     this.queues.setState(chatId, "switching");
-    await this.startNext(chatId, locale, false);
+    await this.showCard(chatId, locale);
+    this.startNext(chatId, locale, false).catch((err) => {
+      this.log.warn("startNext in buttonSkip failed", { error: (err as Error).message });
+    });
     return "ok";
   }
 
   async buttonPrevious(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
-    if (!this.acquireLock(chatId, "prev", 1200)) return "debounced";
+    if (!this.acquireLock(chatId, "prev", 1000)) return "debounced";
     const s = this.queues.get(chatId);
-    if (s.state === "idle") return "idle";
+    if (s.state === "idle" || s.state === "vc_ended") return "idle";
     const prev = this.queues.popHistory(chatId);
     if (!prev) {
       if (s.current) {
-        await this.playTrackItem(chatId, s.current, locale);
+        this.playTrackItem(chatId, s.current, locale).catch(() => {});
         return "ok";
       }
       return "idle";
     }
     this.queues.setState(chatId, "switching");
-    await this.playTrackItem(chatId, prev, locale);
+    await this.showCard(chatId, locale);
+    this.playTrackItem(chatId, prev, locale).catch((err) => {
+      this.log.warn("playTrackItem in buttonPrevious failed", { error: (err as Error).message });
+    });
     return "ok";
   }
 
@@ -1349,6 +1361,9 @@ export class StreamFlow {
       }
       case "error":
         this.log.warn("worker error", { chatId, code: evt.error?.code, message: evt.error?.message });
+        if (evt.error?.code === "PAUSE_FAILED" || evt.error?.code === "RESUME_FAILED" || evt.error?.code === "VOLUME_FAILED") {
+          return;
+        }
         if (this.queues.isSessionActive(chatId)) {
           this.queues.setState(chatId, "recovering");
           await this.startNext(chatId, locale, false);

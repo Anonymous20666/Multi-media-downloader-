@@ -85,6 +85,7 @@ test("stream play: first track starts the call, later tracks queue with position
 
 test("stream track.ended advances with a FRESH resolve; drain stops the call", async () => {
   const h = harness();
+  h.queues.updateSettings(-100, { autoLeaveOnFinish: true });
   await h.flow.play(-100, 1, "one", "supergroup");
   await h.flow.play(-100, 1, "two", "supergroup");
   await h.flow.onEvent(h.evt("track.started"));
@@ -101,6 +102,7 @@ test("stream track.ended advances with a FRESH resolve; drain stops the call", a
 
 test("stream transport: pause/resume/skip/stop publish; buttons check version + admin", async () => {
   const h = harness();
+  h.queues.updateSettings(-100, { autoLeaveOnFinish: true });
   await h.flow.play(-100, 1, "lithe", "supergroup");
   await h.flow.pause(-100, 1);
   await h.flow.resume(-100, 1);
@@ -289,7 +291,7 @@ test("stream buttons: previous, shuffle, clear queue, settings toggle, debouncin
   // Settings toggle
   const setRes = await h.flow.buttonSettingToggle(-100, 1, "leave", `v${v}`);
   assert.equal(setRes, "ok");
-  assert.equal(h.queues.get(-100).settings.autoLeaveOnFinish, false);
+  assert.equal(h.queues.get(-100).settings.autoLeaveOnFinish, true);
 
   const boostRes = await h.flow.buttonSettingToggle(-100, 1, "boost", `v${v}`);
   assert.equal(boostRes, "ok");

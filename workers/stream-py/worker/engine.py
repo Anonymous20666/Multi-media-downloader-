@@ -127,6 +127,7 @@ class PyTgCallsEngine(CallEngine):
         self._session = session_string
         self._on_event = on_event
         self._live: set[int] = set()
+        self._video_chats: set[int] = set()
         self._app: Any = None
         self._call: Any = None
         self._StreamEnded: Any = None
@@ -147,12 +148,18 @@ class PyTgCallsEngine(CallEngine):
             # add_handler without filters invokes func(update) — verified in source.
             if isinstance(update, ended_cls):
                 chat_id = int(getattr(update, "chat_id", 0))
+                st = getattr(update, "stream_type", None)
+                is_video = chat_id in self._video_chats
+                # If audio stream is playing, ignore VIDEO ended notifications!
+                if not is_video and st == ended_cls.Type.VIDEO:
+                    return
                 emit(EngineEvent("ended", chat_id))
             elif isinstance(update, chat_update_cls):
                 status = getattr(update, "status", None)
                 chat_id = int(getattr(update, "chat_id", 0))
-                if status in (ChatUpdate.Status.CLOSED_VOICE_CHAT, ChatUpdate.Status.DISCARDED_CALL, ChatUpdate.Status.KICKED, ChatUpdate.Status.LEFT_GROUP):
+                if status is not None and bool(status & ChatUpdate.Status.LEFT_CALL):
                     self._live.discard(chat_id)
+                    self._video_chats.discard(chat_id)
                     emit(EngineEvent("call.left", chat_id))
 
         self._call.add_handler(_on_update)
@@ -210,7 +217,11 @@ class PyTgCallsEngine(CallEngine):
 
         async def _join() -> bool:
             try:
-                await self._app.join_chat(chat_id_or_invite)
+                chat = await self._app.join_chat(chat_id_or_invite)
+                try:
+                    await self._app.get_chat(chat.id)
+                except Exception:
+                    pass
                 return True
             except UserAlreadyParticipant:
                 return True
@@ -296,6 +307,10 @@ class PyTgCallsEngine(CallEngine):
 
         fresh = chat_id not in self._live
         self._live.add(chat_id)
+        if is_video:
+            self._video_chats.add(chat_id)
+        else:
+            self._video_chats.discard(chat_id)
         if fresh:
             self._on_event(EngineEvent("joined", chat_id))
         self._on_event(EngineEvent("started", chat_id))
@@ -334,6 +349,7 @@ class PyTgCallsEngine(CallEngine):
                 pass
         finally:
             self._live.discard(chat_id)
+            self._video_chats.discard(chat_id)
             # Ephemeral scaling: leave the group chat so the assistant doesn't hit Telegram group limits
             try:
                 self.leave_chat(chat_id)

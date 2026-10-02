@@ -23,4 +23,4 @@ class PreparedSource:
 
 def prepare_source(url: str, resolve: Optional[Callable[[str], list[str]]] = None) -> PreparedSource:
     safe = assert_public_url(url, resolve)
-    return PreparedSource(url=safe, headers={"User-Agent": USER_AGENT})
+    return PreparedSource(url=safe, headers={})

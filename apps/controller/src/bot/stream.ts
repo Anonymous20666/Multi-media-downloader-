@@ -776,23 +776,25 @@ export class StreamFlow {
     let mediaUrl: string | null = next.mediaUrl ?? null;
     let duration: number | null = next.duration ?? null;
 
-    if (!mediaUrl && next.pageUrl) {
-      try {
-        const { manifest } = await this.manager.resolve(next.pageUrl);
-        if (next.isVideo) {
-          mediaUrl = manifest.media.find((x) => x.type === "video" || x.hasVideo)?.url ?? null;
-        } else {
-          mediaUrl = manifest.media.find((x) => x.type === "audio" || x.hasAudio)?.url ?? null;
+    const isClip = Boolean(mediaUrl && /AudioPreview|mzaf_|itunes\.apple\.com|mzstatic\.com/i.test(mediaUrl));
+    if (!mediaUrl || isClip) {
+      if (next.pageUrl && !/itunes\.apple\.com|mzstatic\.com/i.test(next.pageUrl)) {
+        try {
+          const { manifest } = await this.manager.resolve(next.pageUrl);
+          if (next.isVideo) {
+            mediaUrl = manifest.media.find((x) => x.type === "video" || x.hasVideo)?.url ?? null;
+          } else {
+            mediaUrl = manifest.media.find((x) => x.type === "audio" || x.hasAudio)?.url ?? null;
+          }
+          if (manifest.duration) duration = manifest.duration;
+          if (manifest.thumbnail && !next.artworkUrl) next.artworkUrl = manifest.thumbnail;
+        } catch (e) {
+          this.log.warn("stream resolve failed", { error: (e as Error).message });
         }
-        if (manifest.duration) duration = manifest.duration;
-        if (manifest.thumbnail && !next.artworkUrl) next.artworkUrl = manifest.thumbnail;
-      } catch (e) {
-        this.log.warn("stream resolve failed", { error: (e as Error).message });
       }
 
-      // Check if resolved media is an Apple Music 30s preview clip or missing:
-      const isClip30s = mediaUrl && /AudioPreview|mzaf_|itunes\.apple\.com/i.test(mediaUrl);
-      if (!mediaUrl || isClip30s) {
+      const stillNeedsResolve = !mediaUrl || /AudioPreview|mzaf_|itunes\.apple\.com|mzstatic\.com/i.test(mediaUrl);
+      if (stillNeedsResolve) {
         const queryTerm = `${next.title} ${next.performer || ""}`.trim();
         const full = await resolveFullTrack(queryTerm, next.isVideo);
         if (full?.url) {
@@ -893,17 +895,13 @@ export class StreamFlow {
       });
     }
 
-    const s = this.queues.get(chatId);
-    if (s.queue.length === 0) {
-      await this.replenishSessionTracks(chatId, vibe);
-    }
+    // Always replenish the queue so subsequent tracks are immediately queued
+    await this.replenishSessionTracks(chatId, vibe);
 
     await this.startNext(chatId, locale);
 
-    // Replenish remaining tracks completely in the background:
-    this.replenishSessionTracks(chatId, vibe)
-      .then(() => this.preResolveQueue(chatId))
-      .catch(() => {});
+    // Pre-resolve upcoming tracks in background
+    this.preResolveQueue(chatId).catch(() => {});
   }
 
   getVolume(chatId: number): number {

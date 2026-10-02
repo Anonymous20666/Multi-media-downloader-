@@ -64,7 +64,7 @@ export const MAX_QUEUE = 50;
 export const MAX_HISTORY = 20;
 
 export const DEFAULT_SETTINGS: StreamSessionSettings = {
-  autoLeaveOnFinish: true,
+  autoLeaveOnFinish: false,
   pinPlayerCard: true,
   audioQuality: "lossless",
   speakerBoost: true,

@@ -36,19 +36,15 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
     "--no-warnings",
     "--skip-download",
     "--no-check-certificates",
-    "--socket-timeout", "6",
+    "--socket-timeout", "8",
+    "--extractor-args", "youtube:player_client=ios,web,mweb",
     "--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(url)s\t%(thumbnail)s",
   ];
 
-  const cookiePath = "/opt/umedia/secrets/yt_cookies.txt";
-  if (existsSync(cookiePath)) {
-    args.push("--cookies", cookiePath);
-  }
-
   if (isVideo) {
-    args.push("-f", "best[ext=mp4]/best");
+    args.push("-f", "best[protocol=m3u8]/best[ext=mp4]/best");
   } else {
-    args.push("-f", "bestaudio/best");
+    args.push("-f", "234/233/bestaudio[protocol=m3u8]/bestaudio/best");
   }
 
   args.push(target);
@@ -77,10 +73,16 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
   } catch {
     // Secondary fallback with -j if --print failed on exotic target:
     try {
-      const fallbackArgs = ["-j", "--no-playlist", "--no-warnings", "--skip-download"];
-      if (existsSync(cookiePath)) fallbackArgs.push("--cookies", cookiePath);
-      if (isVideo) fallbackArgs.push("-f", "best[ext=mp4]/best");
-      else fallbackArgs.push("-f", "bestaudio/best");
+      const fallbackArgs = [
+        "-j",
+        "--no-playlist",
+        "--no-warnings",
+        "--skip-download",
+        "--socket-timeout", "8",
+        "--extractor-args", "youtube:player_client=ios,web,mweb",
+      ];
+      if (isVideo) fallbackArgs.push("-f", "best[protocol=m3u8]/best[ext=mp4]/best");
+      else fallbackArgs.push("-f", "234/233/bestaudio[protocol=m3u8]/bestaudio/best");
       fallbackArgs.push(target);
 
       const { stdout } = await exec("yt-dlp", fallbackArgs, { timeout: 15000 });

@@ -128,6 +128,7 @@ class PyTgCallsEngine(CallEngine):
         self._on_event = on_event
         self._live: set[int] = set()
         self._video_chats: set[int] = set()
+        self._active_chat_id: Optional[int] = None
         self._app: Any = None
         self._call: Any = None
         self._StreamEnded: Any = None
@@ -157,7 +158,7 @@ class PyTgCallsEngine(CallEngine):
             elif isinstance(update, chat_update_cls):
                 status = getattr(update, "status", None)
                 chat_id = int(getattr(update, "chat_id", 0))
-                if status is not None and bool(status & ChatUpdate.Status.LEFT_CALL):
+                if status is not None and bool(status & (ChatUpdate.Status.CLOSED_VOICE_CHAT | ChatUpdate.Status.DISCARDED_CALL | ChatUpdate.Status.KICKED)):
                     self._live.discard(chat_id)
                     self._video_chats.discard(chat_id)
                     emit(EngineEvent("call.left", chat_id))
@@ -185,7 +186,18 @@ class PyTgCallsEngine(CallEngine):
 
         async def _check_or_create() -> bool:
             nonlocal created
-            peer = await self._app.resolve_peer(chat_id)
+            try:
+                peer = await self._app.resolve_peer(chat_id)
+            except Exception:
+                try:
+                    await self._app.get_chat(chat_id)
+                    peer = await self._app.resolve_peer(chat_id)
+                except Exception as e:
+                    err_txt = str(e)
+                    if "CHANNEL_INVALID" in err_txt or "ChannelInvalid" in type(e).__name__:
+                        raise EngineError("NOT_IN_GROUP", "Assistant account @pappy_d_spammer is not in this group.") from e
+                    raise
+
             full = await self._app.invoke(GetFullChannel(channel=peer))
             call = getattr(full.full_chat, "call", None)
             if not call or getattr(call, "id", 0) == 0:
@@ -205,10 +217,14 @@ class PyTgCallsEngine(CallEngine):
                 # Give Telegram WebRTC servers 1.0s to provision media relay transport endpoints
                 time.sleep(1.0)
             return is_new
+        except EngineError:
+            raise
         except Exception as e:
             err_msg = str(e)
             if "CHAT_ADMIN_REQUIRED" in err_msg:
                 raise EngineError("NEED_ADMIN", "Assistant account needs Admin privileges with 'Manage Video Chats' enabled to start the voice call.") from e
+            elif "CHANNEL_INVALID" in err_msg:
+                raise EngineError("NOT_IN_GROUP", "Assistant account @pappy_d_spammer is not in this group.") from e
             return False
 
     def join_chat(self, chat_id_or_invite: str | int) -> bool:
@@ -253,28 +269,49 @@ class PyTgCallsEngine(CallEngine):
     def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
         from pytgcalls.types import AudioQuality, VideoQuality, MediaStream, GroupCallConfig
         import time
+        # Multi-group scaling: If the assistant is active in another group call,
+        # cleanly leave/stop the previous group call so Telegram WebRTC transport
+        # connects cleanly to the target group without MTProto call collision.
+        for other_cid in list(self._live):
+            if other_cid != chat_id:
+                try:
+                    self.stop(other_cid)
+                    self._on_event(EngineEvent("call.left", other_cid))
+                    time.sleep(1.5)
+                except Exception:
+                    pass
 
-        # Speaker-quality audio boost filter chain:
+        # Speaker-quality audio boost filter chain + Chrome browser disguise:
+        # - user_agent Chrome: bypasses YouTube / googlevideo CDN HTTP 403 Forbidden
         # - bass=g=5:f=100: deep punchy speaker bass instead of thin radio roll-off
         # - treble=g=3:f=6000: crisp high-end clarity for vocals and acoustics
         # - volume=1.8: high-energy speaker volume level (+80% gain boost)
         # - alimiter=limit=0.95:level=false: lookahead peak limiter to eliminate clipping/distortion
-        audio_boost_params = '--audio ---mid -af bass=g=5:f=100,treble=g=3:f=6000,volume=1.8,alimiter=limit=0.95:level=false'
+        chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+        audio_boost_params = f'--audio -user_agent "{chrome_ua}" ---mid -af bass=g=5:f=100,treble=g=3:f=6000,volume=1.8,alimiter=limit=0.95:level=false'
+        video_boost_params = f'--audio -user_agent "{chrome_ua}" --video -user_agent "{chrome_ua}" ---mid -af bass=g=5:f=100,treble=g=3:f=6000,volume=1.8,alimiter=limit=0.95:level=false'
+
+        stream_headers = headers or {
+            "User-Agent": chrome_ua,
+            "Accept": "*/*",
+            "Referer": "https://www.youtube.com/",
+            "Origin": "https://www.youtube.com",
+        }
 
         if is_video:
             stream = MediaStream(
                 url,
                 audio_parameters=AudioQuality.HIGH,
                 video_parameters=VideoQuality.FHD_1080p,
-                headers=headers or None,
-                ffmpeg_parameters=audio_boost_params,
+                headers=stream_headers,
+                ffmpeg_parameters=video_boost_params,
             )
         else:
             stream = MediaStream(
                 url,
                 audio_parameters=AudioQuality.HIGH,
                 video_flags=MediaStream.Flags.IGNORE,
-                headers=headers or None,
+                headers=stream_headers,
                 ffmpeg_parameters=audio_boost_params,
             )
         config = GroupCallConfig(auto_start=True)
@@ -286,6 +323,8 @@ class PyTgCallsEngine(CallEngine):
             try:
                 self._call.play(chat_id, stream, config=config)
                 break
+            except EngineError:
+                raise
             except Exception as e:
                 err_name = type(e).__name__
                 err_msg = str(e)
@@ -298,12 +337,21 @@ class PyTgCallsEngine(CallEngine):
                     self._ensure_group_call(chat_id)
                     time.sleep(1.5)
                     continue
-                elif "UserNotParticipant" in err_name or "USER_NOT_PARTICIPANT" in err_msg:
+                elif "UserNotParticipant" in err_name or "USER_NOT_PARTICIPANT" in err_msg or "ChannelInvalid" in err_name or "CHANNEL_INVALID" in err_msg:
                     raise EngineError("NOT_IN_GROUP", "Assistant account @pappy_d_spammer is not in this group.") from e
                 elif "ChatAdminRequired" in err_name or "CHAT_ADMIN_REQUIRED" in err_msg:
                     raise EngineError("NEED_ADMIN", "Assistant account needs Admin privileges with 'Manage Video Chats' enabled.") from e
                 else:
                     raise EngineError("PLAY_FAILED", f"{err_name}: {err_msg}") from e
+
+        if self._active_chat_id and self._active_chat_id != chat_id:
+            try:
+                self.stop(self._active_chat_id)
+                self._on_event(EngineEvent("call.left", self._active_chat_id))
+                time.sleep(1.0)
+            except Exception:
+                pass
+        self._active_chat_id = chat_id
 
         fresh = chat_id not in self._live
         self._live.add(chat_id)
@@ -318,51 +366,55 @@ class PyTgCallsEngine(CallEngine):
 
     def pause(self, chat_id: int) -> None:
         cid = int(chat_id)
-        if cid not in self._live:
-            return
         try:
             self._call.pause(cid)
-        except Exception as e:
-            err = type(e).__name__
-            if "ConnectionNotFound" in err or "NotInCall" in err:
-                return
-            return
+        except Exception:
+            pass
 
     def resume(self, chat_id: int) -> None:
         cid = int(chat_id)
-        if cid not in self._live:
-            return
         try:
             self._call.resume(cid)
-        except Exception as e:
-            err = type(e).__name__
-            if "ConnectionNotFound" in err or "NotInCall" in err:
-                return
-            return
+        except Exception:
+            pass
 
     def stop(self, chat_id: int) -> None:
+        cid = int(chat_id)
         try:
-            self._call.leave_call(chat_id)
+            self._call.leave_call(cid)
         except Exception:
+            pass
+        try:
+            if hasattr(self._call, "_clear_cache"):
+                self._call._clear_cache(cid)
+        except Exception:
+            pass
+
+        async def _force_leave() -> None:
             try:
-                if hasattr(self._call, "_clear_cache"):
-                    self._call._clear_cache(chat_id)
-            except Exception:
-                pass
-        finally:
-            self._live.discard(chat_id)
-            self._video_chats.discard(chat_id)
-            # Ephemeral scaling: leave the group chat so the assistant doesn't hit Telegram group limits
-            try:
-                self.leave_chat(chat_id)
+                from pyrogram.raw.functions.phone import LeaveGroupCall
+                from pyrogram.raw.functions.channels import GetFullChannel
+                peer = await self._app.resolve_peer(cid)
+                full = await self._app.invoke(GetFullChannel(channel=peer))
+                call = getattr(full.full_chat, "call", None)
+                if call and getattr(call, "id", 0) != 0:
+                    await self._app.invoke(LeaveGroupCall(call=call, source=0))
             except Exception:
                 pass
 
-    def set_volume(self, chat_id: int, level: int) -> None:
-        if chat_id not in self._live:
-            return
         try:
-            self._call.change_volume_call(chat_id, level)
+            self._run_pyrogram(_force_leave())
+        except Exception:
+            pass
+        self._live.discard(cid)
+        self._video_chats.discard(cid)
+        if self._active_chat_id == cid:
+            self._active_chat_id = None
+
+    def set_volume(self, chat_id: int, level: int) -> None:
+        cid = int(chat_id)
+        try:
+            self._call.change_volume_call(cid, level)
         except Exception:
             pass
 

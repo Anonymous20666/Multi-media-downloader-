@@ -40,10 +40,8 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
     "--no-playlist",
     "--playlist-items", "1",
     "--no-warnings",
-    "--skip-download",
     "--no-check-certificates",
     "--socket-timeout", "10",
-    "--extractor-args", "youtube:player_client=web,web_embedded,android",
   ];
 
   if (existsSync(COOKIES_PATH)) {
@@ -52,66 +50,55 @@ export async function resolveFullTrack(queryOrUrl: string, isVideo = false): Pro
 
   const formatArgs = isVideo
     ? ["-f", "best[protocol=m3u8]/best[ext=mp4]/best"]
-    : ["-f", "251/250/249/140/bestaudio[protocol=m3u8]/bestaudio/best"];
+    : ["-f", "251/250/249/140/bestaudio/best"];
 
-  const printArgs = [
-    ...baseArgs,
-    ...formatArgs,
-    "--print", "%(title)s\t%(uploader)s\t%(duration)s\t%(url)s\t%(thumbnail)s",
-    target,
-  ];
-
+  // Fast direct JSON extraction (-j)
   try {
-    const { stdout } = await exec("yt-dlp", printArgs, { timeout: 18000 });
-    const lines = stdout.trim().split("\n");
-    const lastLine = lines[lines.length - 1];
-    if (lastLine) {
-      const parts = lastLine.split("\t");
-      if (parts.length >= 4 && parts[3]) {
-        const [title, author, rawDur, url, thumb] = parts;
-        const durNum = rawDur && rawDur !== "NA" ? Math.round(parseFloat(rawDur)) : undefined;
-
-        const result: ResolvedFullTrack = {
-          title: title || cleanQuery,
-          author: author && author !== "NA" ? author : undefined,
-          duration: durNum,
-          url: url.trim(),
-          thumbnail: thumb && thumb !== "NA" ? thumb.trim() : undefined,
-        };
-
-        cache.set(normKey, { track: result, expiresAt: Date.now() + CACHE_TTL_MS });
-        return result;
-      }
-    }
-  } catch {
-    // Primary extraction failed or timed out — continue to fallback
-  }
-
-  // Secondary fallback: dump single JSON object (-j)
-  try {
-    const fallbackArgs = [
+    const jsonArgs = [
       ...baseArgs,
       ...formatArgs,
       "-j",
       target,
     ];
-
-    const { stdout } = await exec("yt-dlp", fallbackArgs, { timeout: 18000 });
-    const data = JSON.parse(stdout);
-    if (data?.url) {
+    const { stdout } = await exec("yt-dlp", jsonArgs, { timeout: 15000 });
+    const data = JSON.parse(stdout.trim().split("\n")[0] || "{}");
+    const streamUrl = data.url || (Array.isArray(data.requested_formats) ? data.requested_formats.find((f: any) => f.audio_ext !== "none" || f.vcodec !== "none")?.url : null);
+    if (streamUrl) {
       const result: ResolvedFullTrack = {
         title: data.title || cleanQuery,
         author: data.uploader || data.channel || data.artist || undefined,
         album: data.album || undefined,
         duration: typeof data.duration === "number" ? Math.round(data.duration) : undefined,
-        url: data.url,
+        url: streamUrl,
         thumbnail: data.thumbnail || (Array.isArray(data.thumbnails) && data.thumbnails.length > 0 ? data.thumbnails[data.thumbnails.length - 1]?.url : undefined),
       };
       cache.set(normKey, { track: result, expiresAt: Date.now() + CACHE_TTL_MS });
       return result;
     }
   } catch {
-    // Both attempts failed
+    // Primary extraction failed — continue to fallback
+  }
+
+  // Secondary fallback: -g (direct URL) + --print metadata
+  try {
+    const gArgs = [
+      ...baseArgs,
+      ...formatArgs,
+      "-g",
+      target,
+    ];
+    const { stdout: gOut } = await exec("yt-dlp", gArgs, { timeout: 15000 });
+    const url = gOut.trim().split("\n")[0];
+    if (url && /^https?:\/\//i.test(url)) {
+      const result: ResolvedFullTrack = {
+        title: cleanQuery,
+        url,
+      };
+      cache.set(normKey, { track: result, expiresAt: Date.now() + CACHE_TTL_MS });
+      return result;
+    }
+  } catch {
+    // Fallback failed
   }
 
   return null;

@@ -48,6 +48,7 @@ export class StreamFlow {
   private assistantId: number;
   private assistantUsername: string;
   private watchdogTimer?: NodeJS.Timeout;
+  private lastSkipAt = new Map<number, number>();
 
   constructor(
     manager: ProviderManager,
@@ -1064,6 +1065,7 @@ export class StreamFlow {
     if (!this.acquireLock(chatId, "skip", 1000)) return "debounced";
     const s = this.queues.get(chatId);
     if (s.state === "idle" || s.state === "vc_ended") return "idle";
+    this.lastSkipAt.set(chatId, Date.now());
     this.queues.setState(chatId, "switching");
     await this.showCard(chatId, locale);
     this.startNext(chatId, locale, false).catch((err) => {
@@ -1078,6 +1080,7 @@ export class StreamFlow {
     if (!this.acquireLock(chatId, "prev", 1000)) return "debounced";
     const s = this.queues.get(chatId);
     if (s.state === "idle" || s.state === "vc_ended") return "idle";
+    this.lastSkipAt.set(chatId, Date.now());
     const prev = this.queues.popHistory(chatId);
     if (!prev) {
       if (s.current) {
@@ -1329,11 +1332,17 @@ export class StreamFlow {
         await this.showCard(chatId, locale);
         this.preResolveQueue(chatId).catch(() => {});
         break;
-      case "track.ended":
+      case "track.ended": {
         if (s.state === "idle" && !this.queues.isSessionActive(chatId)) return;
+        const lastSkip = this.lastSkipAt.get(chatId) || 0;
+        if (Date.now() - lastSkip < 2500) {
+          this.log.info("Ignoring phantom track.ended immediately after manual track skip", { chatId });
+          return;
+        }
         this.queues.setState(chatId, "switching");
         await this.startNext(chatId, locale, true);
         break;
+      }
       case "paused":
         this.queues.setState(chatId, "paused");
         await this.showCard(chatId, locale);
@@ -1362,6 +1371,31 @@ export class StreamFlow {
       case "error":
         this.log.warn("worker error", { chatId, code: evt.error?.code, message: evt.error?.message });
         if (evt.error?.code === "PAUSE_FAILED" || evt.error?.code === "RESUME_FAILED" || evt.error?.code === "VOLUME_FAILED") {
+          return;
+        }
+        if (evt.error?.code === "NOT_IN_GROUP") {
+          this.queues.setState(chatId, "recovering");
+          const asst = await this.ensureAssistantReady(chatId);
+          if (asst.ok) {
+            await this.startNext(chatId, locale, false);
+            return;
+          }
+        }
+        if (evt.error?.code === "NEED_ADMIN") {
+          const s = this.queues.get(chatId);
+          const msgId = s.liveCard?.messageId;
+          if (msgId) {
+            await this.sender.enqueue(
+              "editMessageText",
+              {
+                chat_id: chatId,
+                message_id: msgId,
+                text: `⚠️ *Assistant Needs Voice Chat Admin Rights*\n\nAssistant @${this.assistantUsername} is in this group, but needs Admin rights with *"Manage Video Chats"* turned on to start broadcasting!`,
+                parse_mode: "Markdown",
+              },
+              "interactive",
+            ).catch(() => {});
+          }
           return;
         }
         if (this.queues.isSessionActive(chatId)) {

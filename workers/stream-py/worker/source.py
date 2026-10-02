@@ -12,7 +12,8 @@ from typing import Callable, Optional
 
 from .security import assert_public_url
 
-USER_AGENT = "PappyStreamWorker/1.5 (+https://t.me/)"
+CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+USER_AGENT = CHROME_USER_AGENT
 
 
 @dataclass
@@ -23,4 +24,10 @@ class PreparedSource:
 
 def prepare_source(url: str, resolve: Optional[Callable[[str], list[str]]] = None) -> PreparedSource:
     safe = assert_public_url(url, resolve)
-    return PreparedSource(url=safe, headers={})
+    headers = {
+        "User-Agent": CHROME_USER_AGENT,
+        "Accept": "*/*",
+        "Referer": "https://www.youtube.com/",
+        "Origin": "https://www.youtube.com",
+    }
+    return PreparedSource(url=safe, headers=headers)

@@ -550,6 +550,13 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
     recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    if (isGroup) {
+      if (!(await flows.stream.isAdmin(ctx.chatId, ctx.from.id))) {
+        await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("stream.need_admin") }, "interactive");
+        return;
+      }
+    }
     await flows.stream.viewQueue(ctx.chatId);
   });
 
@@ -597,6 +604,15 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     if (!parsed || !ctx.chatId) return; // bare ack below
     const chatId = ctx.chatId;
     const messageId = ctx.callbackQuery.message?.message_id;
+
+    // Enforce admin-only permission on voice chat wizard interactions
+    if (parsed.action.startsWith("sw")) {
+      if (!(await flows.stream.isAdmin(chatId, userId))) {
+        await toast(t("stream.need_admin"), true);
+        return;
+      }
+    }
+
     try {
       switch (parsed.action) {
         case "ms": // in-flight V1 result cards → same one-tap download
@@ -695,8 +711,9 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           break;
         }
         case "sqe": {
-          const r = await flows.stream.buttonQueue(chatId, parsed.target);
+          const r = await flows.stream.buttonQueue(chatId, parsed.target, "en", userId);
           if (r === "stale") await toast(t("stream.stale"));
+          else if (r === "denied") await toast(t("stream.need_admin"), true);
           break;
         }
 
@@ -1110,37 +1127,40 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     if (isGroup) {
       // 1. Check if user is in an active stream wizard session in this chat
       const session = wizardRegistry.findByUser(ctx.chatId, ctx.from.id);
-      if (session?.waitingCustomHours) {
-        // Delete user's message immediately to keep chat clean (§Zero Clutter)
-        await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
-        const hours = parseInt(text.replace(/[^0-9]/g, ""), 10);
-        if (Number.isFinite(hours) && hours > 0 && hours <= 720) {
-          session.waitingCustomHours = false;
-          session.durationMinutes = hours * 60;
-          session.durationLabel = `${hours} hrs`;
-          session.step = "vibe";
-          const rich = renderWizardVibe(session.id, session.durationLabel);
-          await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+      if (session) {
+        if (!(await flows.stream.isAdmin(ctx.chatId, ctx.from.id))) return;
+        if (session.waitingCustomHours) {
+          // Delete user's message immediately to keep chat clean (§Zero Clutter)
+          await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
+          const hours = parseInt(text.replace(/[^0-9]/g, ""), 10);
+          if (Number.isFinite(hours) && hours > 0 && hours <= 720) {
+            session.waitingCustomHours = false;
+            session.durationMinutes = hours * 60;
+            session.durationLabel = `${hours} hrs`;
+            session.step = "vibe";
+            const rich = renderWizardVibe(session.id, session.durationLabel);
+            await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          }
+          return;
         }
-        return;
-      }
-      if (session?.waitingCustomVibe) {
-        await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
-        session.waitingCustomVibe = false;
-        const rich = renderWizardConnecting(text, session.durationLabel);
-        await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
-        wizardRegistry.delete(session.id);
-        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false, session.messageId);
-        return;
-      }
-      if (session?.waitingCustomMovie) {
-        await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
-        session.waitingCustomMovie = false;
-        const rich = renderWizardConnecting(text, "Movie Runtime");
-        await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
-        wizardRegistry.delete(session.id);
-        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, 120, ctx.chat?.type ?? "supergroup", "en", true, session.messageId);
-        return;
+        if (session.waitingCustomVibe) {
+          await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
+          session.waitingCustomVibe = false;
+          const rich = renderWizardConnecting(text, session.durationLabel);
+          await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
+          wizardRegistry.delete(session.id);
+          await flows.stream.playSession(ctx.chatId, ctx.from.id, text, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false, session.messageId);
+          return;
+        }
+        if (session.waitingCustomMovie) {
+          await sender.enqueue("deleteMessage", { chat_id: ctx.chatId, message_id: ctx.message.message_id }, "control").catch(() => {});
+          session.waitingCustomMovie = false;
+          const rich = renderWizardConnecting(text, "Movie Runtime");
+          await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
+          wizardRegistry.delete(session.id);
+          await flows.stream.playSession(ctx.chatId, ctx.from.id, text, 120, ctx.chat?.type ?? "supergroup", "en", true, session.messageId);
+          return;
+        }
       }
 
       // 2. Check conversational AI intent routing (e.g. "pappy play Lithe", "omega stream Trap")
@@ -1158,6 +1178,10 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
       const { intent, query } = detectIntent(text);
 
       if (intent === "stream") {
+        if (!(await flows.stream.isAdmin(ctx.chatId, ctx.from.id))) {
+          await sender.enqueue("sendMessage", { chat_id: ctx.chatId, text: t("stream.need_admin") }, "interactive");
+          return;
+        }
         await flows.stream.play(ctx.chatId, ctx.from.id, query, ctx.chat?.type ?? "supergroup", "en", false);
         return;
       }

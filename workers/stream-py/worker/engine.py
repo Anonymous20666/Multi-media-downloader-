@@ -243,12 +243,20 @@ class PyTgCallsEngine(CallEngine):
         from pytgcalls.types import AudioQuality, VideoQuality, MediaStream, GroupCallConfig
         import time
 
+        # Speaker-quality audio boost filter chain:
+        # - bass=g=5:f=100: deep punchy speaker bass instead of thin radio roll-off
+        # - treble=g=3:f=6000: crisp high-end clarity for vocals and acoustics
+        # - volume=1.8: high-energy speaker volume level (+80% gain boost)
+        # - alimiter=limit=0.95:level=false: lookahead peak limiter to eliminate clipping/distortion
+        audio_boost_params = '--audio ---mid -af bass=g=5:f=100,treble=g=3:f=6000,volume=1.8,alimiter=limit=0.95:level=false'
+
         if is_video:
             stream = MediaStream(
                 url,
                 audio_parameters=AudioQuality.HIGH,
                 video_parameters=VideoQuality.FHD_1080p,
                 headers=headers or None,
+                ffmpeg_parameters=audio_boost_params,
             )
         else:
             stream = MediaStream(
@@ -256,6 +264,7 @@ class PyTgCallsEngine(CallEngine):
                 audio_parameters=AudioQuality.HIGH,
                 video_flags=MediaStream.Flags.IGNORE,
                 headers=headers or None,
+                ffmpeg_parameters=audio_boost_params,
             )
         config = GroupCallConfig(auto_start=True)
 

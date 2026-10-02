@@ -1036,7 +1036,8 @@ export class StreamFlow {
     return "ok";
   }
 
-  async buttonQueue(chatId: number, target: string, locale = "en"): Promise<ButtonResult> {
+  async buttonQueue(chatId: number, target: string, locale = "en", userId?: number): Promise<ButtonResult> {
+    if (userId !== undefined && !(await this.isAdmin(chatId, userId))) return "denied";
     await this.viewQueue(chatId, locale);
     return "ok";
   }

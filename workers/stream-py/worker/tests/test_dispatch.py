@@ -62,8 +62,10 @@ class DispatchTest(unittest.TestCase):
         self.dispatch({**play_cmd(), "id": "c", "type": "stream.resume", "idempotencyKey": "k3", "track": None})
         self.dispatch({**play_cmd(), "id": "c", "type": "stream.stop", "idempotencyKey": "k4", "track": None})
         self.dispatch({**play_cmd(), "id": "c", "type": "stream.ping", "idempotencyKey": "k5", "track": None})
+        self.dispatch({**play_cmd(), "id": "c", "type": "stream.join", "idempotencyKey": "k6", "track": None, "inviteLink": "https://t.me/+xyz"})
+        self.dispatch({**play_cmd(), "id": "c", "type": "stream.leave", "idempotencyKey": "k7", "track": None})
         names = [e["name"] for e in self.bus.published]
-        self.assertEqual(names, ["paused", "resumed", "call.left", "pong"])
+        self.assertEqual(names, ["paused", "resumed", "call.left", "pong", "call.joined", "call.left"])
 
     def test_malformed_and_unknown_dropped_quietly(self):
         self.dispatch({"__malformed": True})

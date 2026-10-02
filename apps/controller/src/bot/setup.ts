@@ -38,6 +38,9 @@ import {
   renderGroupMenuMoviesPrompt,
   renderGroupMenuShortsPrompt,
   renderGroupMenuSettingsPrompt,
+  checkChatMemberPermissions,
+  renderBotAdminRequiredRich,
+  renderBotAdminRequiredFallback,
 } from "./group-menu.js";
 import {
   StreamWizardRegistry,
@@ -165,6 +168,57 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     }
   }
 
+  async function ensureBotAdmin(chatId: number): Promise<boolean> {
+    try {
+      const botId = bot.botInfo?.id || parseInt(cfg.botToken?.split(":")[0] || "0", 10);
+      const botUsername = bot.botInfo?.username || "pappyextrav1_bot";
+      const r = (await sender.enqueue("getChatMember", { chat_id: chatId, user_id: botId }, "background")) as any;
+      const check = checkChatMemberPermissions(r);
+      if (!check.isAdmin || !check.canPromoteMembers || !check.canInviteUsers) {
+        try {
+          const rich = renderBotAdminRequiredRich(botUsername, check);
+          await sender.enqueue("sendRichMessage", { chat_id: chatId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive");
+        } catch {
+          const fb = renderBotAdminRequiredFallback(botUsername, check);
+          await sender.enqueue("sendMessage", { chat_id: chatId, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive");
+        }
+        return false;
+      }
+      return true;
+    } catch (e) {
+      log.warn("check bot permissions error", { error: (e as Error).message });
+      return true;
+    }
+  }
+
+  bot.on("my_chat_member", async (ctx) => {
+    const update = ctx.myChatMember;
+    const chat = update.chat;
+    if (chat.type !== "group" && chat.type !== "supergroup") return;
+
+    recordGroup(chat.id, chat.type, (chat as { title?: string }).title);
+    const newMember = update.new_chat_member;
+    const botUsername = ctx.me?.username || "pappyextrav1_bot";
+
+    if (newMember.status === "left" || newMember.status === "kicked") {
+      await flows.stream.cleanupChat(chat.id).catch(() => {});
+      return;
+    }
+
+    const check = checkChatMemberPermissions(newMember);
+    if (!check.isAdmin || !check.canPromoteMembers || !check.canInviteUsers) {
+      try {
+        const rich = renderBotAdminRequiredRich(botUsername, check);
+        await sender.enqueue("sendRichMessage", { chat_id: chat.id, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive");
+      } catch {
+        const fb = renderBotAdminRequiredFallback(botUsername, check);
+        await sender.enqueue("sendMessage", { chat_id: chat.id, text: fb.text, parse_mode: "Markdown", reply_markup: fb.reply_markup }, "interactive");
+      }
+    } else {
+      await showGroupMenu(chat.id, (chat as { title?: string }).title ?? "Group");
+    }
+  });
+
   bot.command("start", async (ctx) => {
     const chatId = ctx.chatId;
     if (!chatId || !ctx.from) return;
@@ -176,6 +230,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     const payload = argText(ctx.message?.text ?? "", "start").trim();
     if (!payload) {
       if (isGroup) {
+        if (!(await ensureBotAdmin(chatId))) return;
         await showGroupMenu(chatId, (ctx.chat as { title?: string } | undefined)?.title ?? "Group");
       } else {
         await showHub(chatId);
@@ -192,6 +247,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
     const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
     if (isGroup) {
       recordGroup(chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+      if (!(await ensureBotAdmin(chatId))) return;
       await showGroupMenu(chatId, (ctx.chat as { title?: string } | undefined)?.title ?? "Group");
     } else {
       await showHub(chatId);
@@ -208,6 +264,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
       return;
     }
     recordGroup(chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    if (!(await ensureBotAdmin(chatId))) return;
     if (!(await flows.stream.isAdmin(chatId, ctx.from.id))) {
       await sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin") }, "interactive");
       return;
@@ -453,7 +510,11 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
   bot.command("play", async (ctx) => {
     if (!ctx.chatId || !ctx.from) return;
     flows.seen.record(ctx.from.id);
-    recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+    if (isGroup) {
+      recordGroup(ctx.chatId, ctx.chat?.type, (ctx.chat as { title?: string } | undefined)?.title);
+      if (!(await ensureBotAdmin(ctx.chatId))) return;
+    }
     await flows.stream.play(ctx.chatId, ctx.from.id, argText(ctx.message?.text ?? "", "play"), ctx.chat?.type ?? "private");
   });
 
@@ -768,12 +829,37 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
             await flows.stream.stop(chatId, userId);
             await toast("⏹ Stream stopped.");
           } else if (target === "stream") {
+            if (!(await ensureBotAdmin(chatId))) return;
             if (!(await flows.stream.isAdmin(chatId, userId))) {
               await toast(t("stream.need_admin"), true);
               break;
             }
             const session = wizardRegistry.create(chatId, userId, messageId);
             const rich = renderWizardMode(session.id);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else if (target === "refresh") {
+            const chatTitle = (ctx.chat as { title?: string } | undefined)?.title ?? "Group";
+            const rich = renderGroupMenuRich(chatTitle);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+            await toast("🔄 Console refreshed!");
+          }
+          break;
+        }
+        case "gma": {
+          if (!messageId) break;
+          const botId = bot.botInfo?.id || parseInt(cfg.botToken?.split(":")[0] || "0", 10);
+          const botUsername = bot.botInfo?.username || "pappyextrav1_bot";
+          const r = (await sender.enqueue("getChatMember", { chat_id: chatId, user_id: botId }, "interactive")) as any;
+          const check = checkChatMemberPermissions(r);
+          if (check.isAdmin && check.canPromoteMembers && check.canInviteUsers) {
+            await toast("✅ Admin permissions verified!");
+            const chatTitle = (ctx.chat as { title?: string } | undefined)?.title ?? "Group";
+            const rich = renderGroupMenuRich(chatTitle);
+            await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
+          } else {
+            const missing = check.missingPermissions;
+            await toast(`⚠️ Still missing: ${missing.join(", ")}`, true);
+            const rich = renderBotAdminRequiredRich(botUsername, check);
             await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message, reply_markup: rich.reply_markup }, "interactive").catch(() => {});
           }
           break;
@@ -888,7 +974,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           const rich = renderWizardConnecting(vibe, session.durationLabel);
           await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
           wizardRegistry.delete(sid);
-          await flows.stream.playSession(chatId, userId, vibe, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false);
+          await flows.stream.playSession(chatId, userId, vibe, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false, messageId);
           break;
         }
         case "swcv": {
@@ -926,7 +1012,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           const rich = renderWizardConnecting(category, "Movie Runtime");
           await sender.enqueue("editMessageText", { chat_id: chatId, message_id: messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
           wizardRegistry.delete(sid);
-          await flows.stream.playSession(chatId, userId, category, 120, ctx.chat?.type ?? "supergroup", "en", true);
+          await flows.stream.playSession(chatId, userId, category, 120, ctx.chat?.type ?? "supergroup", "en", true, messageId);
           break;
         }
         case "swcm": {
@@ -1044,7 +1130,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         const rich = renderWizardConnecting(text, session.durationLabel);
         await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
         wizardRegistry.delete(session.id);
-        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false);
+        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, session.durationMinutes, ctx.chat?.type ?? "supergroup", "en", false, session.messageId);
         return;
       }
       if (session?.waitingCustomMovie) {
@@ -1053,7 +1139,7 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
         const rich = renderWizardConnecting(text, "Movie Runtime");
         await sender.enqueue("editMessageText", { chat_id: ctx.chatId, message_id: session.messageId, rich_message: rich.rich_message }, "interactive").catch(() => {});
         wizardRegistry.delete(session.id);
-        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, 120, ctx.chat?.type ?? "supergroup", "en", true);
+        await flows.stream.playSession(ctx.chatId, ctx.from.id, text, 120, ctx.chat?.type ?? "supergroup", "en", true, session.messageId);
         return;
       }
 

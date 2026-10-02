@@ -84,7 +84,7 @@ test("stream track.ended advances with a FRESH resolve; drain stops the call", a
   assert.equal(h.resolves(), 2);
   await h.flow.onEvent(h.evt("track.ended"));
   assert.equal(h.cmds[2].type, "stream.stop");
-  assert.match(h.calls[h.calls.length - 1].text, /finished/);
+  assert.match(h.calls[h.calls.length - 1].text, /finished/i);
   assert.equal(h.queues.get(-100).state, "idle");
 });
 

@@ -13,6 +13,8 @@ import { StreamQueues, type QueuedTrack } from "../stream/queue.js";
 import type { StreamBus } from "../stream/bus.js";
 import { renderLiveCard, renderLiveCardRich, renderQueue, renderStreamConnectingRich } from "./stream-ui.js";
 import { resolveFullTrack } from "../stream/full-audio.js";
+import { RichMessageBuilder } from "../ui/rich-components.js";
+import { packCb, type KbButton } from "../ui/components.js";
 
 const ADMINS = new Set(["creator", "administrator"]);
 
@@ -82,40 +84,125 @@ export class StreamFlow {
       if (s.state !== "idle" && s.sessionEndTime && Date.now() >= s.sessionEndTime) {
         this.log.info("Session time elapsed — concluding call", { chatId });
         await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+        const msgId = s.liveCard?.messageId;
         await this.unpinLiveCard(chatId);
         const mins = s.sessionDurationMinutes ?? 15;
         this.queues.reset(chatId);
-        await this.sender.enqueue(
-          "sendMessage",
-          {
-            chat_id: chatId,
-            text: `📻 *Session Complete*\n\nYour ${mins}-minute stream session has concluded.\nVoice chat call left. Assistant @${this.assistantUsername} remains in the group ready for next stream!`,
-            parse_mode: "Markdown",
-          },
-          "interactive",
-        );
+        if (msgId) {
+          const builder = new RichMessageBuilder()
+            .heading(2, "📻 SESSION COMPLETED")
+            .divider()
+            .paragraph(`Your ${mins}-minute stream session has concluded.`)
+            .paragraph(`Assistant @${this.assistantUsername} left the voice call and group chat.`)
+            .footer("PAPPY Media · Stream & Download Gateway");
+          const rich = builder.build();
+          const rows: KbButton[][] = [
+            [{ text: "📡 Start New Stream", callback_data: packCb("gm", "stream", 1), style: "success" }],
+            [{ text: "◀ Group Deck", callback_data: packCb("gm", "back", 1), style: "default" }],
+          ];
+          await this.sender.enqueue(
+            "editMessageText",
+            { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: { inline_keyboard: rows } },
+            "interactive",
+          ).catch(() => {});
+        } else {
+          await this.sender.enqueue(
+            "sendMessage",
+            {
+              chat_id: chatId,
+              text: `📻 *Session Complete*\n\nYour ${mins}-minute stream session has concluded.\nVoice chat call left and assistant @${this.assistantUsername} left the group chat.`,
+              parse_mode: "Markdown",
+            },
+            "interactive",
+          );
+        }
       }
     }
   }
 
   async ensureAssistantReady(chatId: number): Promise<{ ok: boolean; reason?: string }> {
     if (!this.assistantId) return { ok: true };
+    type ChatMemberCheck = { status?: string; can_manage_video_chats?: boolean; can_manage_voice_chats?: boolean } | null;
     try {
-      const r = (await this.sender.enqueue(
-        "getChatMember",
-        { chat_id: chatId, user_id: this.assistantId },
-        "background",
-      )) as { status?: string };
-
-      const status = r?.status ?? "left";
-      if (["left", "kicked"].includes(status)) {
-        return {
-          ok: false,
-          reason: `⚠️ *Assistant Account Not in Group*\n\nThe stream assistant account (@${this.assistantUsername}) is not in this group.\n\n👉 Please [add @${this.assistantUsername}](tg://resolve?domain=${this.assistantUsername}) to this group and promote it to Admin so it can join and stream in the voice chat!`,
-        };
+      let r: ChatMemberCheck = null;
+      try {
+        const res = await this.sender.enqueue(
+          "getChatMember",
+          { chat_id: chatId, user_id: this.assistantId },
+          "background",
+        );
+        r = res as ChatMemberCheck;
+      } catch {
+        // Not found or not in chat
       }
 
-      if (status !== "administrator" && status !== "creator") {
+      const status = r?.status ?? "left";
+
+      // If assistant is not in group, auto-invite via invite link and auto-join
+      if (["left", "kicked"].includes(status) || !r) {
+        this.log.info("Assistant not in chat — generating invite and auto-joining", { chatId, assistantId: this.assistantId });
+        let inviteLink: string | undefined;
+        try {
+          const inv = (await this.sender.enqueue(
+            "createChatInviteLink",
+            {
+              chat_id: chatId,
+              member_limit: 1,
+              expire_date: Math.floor(Date.now() / 1000) + 300,
+              name: "Stream Assistant",
+            },
+            "control",
+          )) as { invite_link?: string };
+          inviteLink = inv?.invite_link;
+        } catch (e) {
+          this.log.warn("Could not create chat invite link for assistant", { error: (e as Error).message });
+          return {
+            ok: false,
+            reason: `⚠️ *Bot Needs Admin Privileges*\n\nCould not create invite link for assistant @${this.assistantUsername}.\nPlease ensure @pappyextrav1_bot has *"Invite Users via Link"* and *"Add Admins"* permissions!`,
+          };
+        }
+
+        if (!inviteLink) {
+          return {
+            ok: false,
+            reason: `⚠️ Could not generate invite link for assistant @${this.assistantUsername}.`,
+          };
+        }
+
+        // Publish join command to stream worker
+        await this.bus.publish(buildCmd("stream.join", chatId, { inviteLink }));
+
+        // Poll getChatMember up to 6 times (3s max)
+        let joined = false;
+        for (let i = 0; i < 6; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          try {
+            const m = (await this.sender.enqueue(
+              "getChatMember",
+              { chat_id: chatId, user_id: this.assistantId },
+              "background",
+            )) as ChatMemberCheck;
+            if (m && m.status !== "left" && m.status !== "kicked") {
+              joined = true;
+              r = m;
+              break;
+            }
+          } catch {}
+        }
+
+        if (!joined) {
+          return {
+            ok: false,
+            reason: `⚠️ Assistant @${this.assistantUsername} could not join via invite link.\n👉 Please make sure the bot has permission to invite users, or add @${this.assistantUsername} manually.`,
+          };
+        }
+      }
+
+      // Assistant is in the group. Check if administrator with can_manage_video_chats
+      const currentStatus = r?.status;
+      const hasVcPrivilege = Boolean(r?.can_manage_video_chats || r?.can_manage_voice_chats);
+
+      if (currentStatus !== "administrator" && currentStatus !== "creator" || !hasVcPrivilege) {
         try {
           await this.sender.enqueue(
             "promoteChatMember",
@@ -129,15 +216,6 @@ export class StreamFlow {
             "control",
           );
           this.log.info("Auto-promoted assistant to admin in group", { chatId, assistantId: this.assistantId });
-          await this.sender.enqueue(
-            "sendMessage",
-            {
-              chat_id: chatId,
-              text: `✅ Automatically promoted @${this.assistantUsername} to Admin with Voice Chat privileges!`,
-              parse_mode: "Markdown",
-            },
-            "interactive",
-          );
         } catch (e) {
           this.log.warn("Could not auto-promote assistant", { error: (e as Error).message });
           return {
@@ -320,7 +398,15 @@ export class StreamFlow {
   }
 
   /** /play <query> — group admins only. */
-  async play(chatId: number, userId: number, query: string, chatType: string, locale = "en", isVideo = false): Promise<void> {
+  async play(
+    chatId: number,
+    userId: number,
+    query: string,
+    chatType: string,
+    locale = "en",
+    isVideo = false,
+    existingMessageId?: number,
+  ): Promise<void> {
     if (chatType !== "group" && chatType !== "supergroup") {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.dm", {}, locale) }, "interactive");
       return;
@@ -333,6 +419,12 @@ export class StreamFlow {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
       return;
     }
+
+    if (existingMessageId) {
+      this.queues.setLiveCard(chatId, { chatId, messageId: existingMessageId });
+      await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: existingMessageId, disable_notification: true }, "control").catch(() => {});
+    }
+
     const asst = await this.ensureAssistantReady(chatId);
     if (!asst.ok) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: asst.reason!, parse_mode: "Markdown" }, "interactive");
@@ -507,18 +599,38 @@ export class StreamFlow {
     // Check if session has naturally expired:
     if (s.sessionEndTime && Date.now() >= s.sessionEndTime) {
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+      const msgId = s.liveCard?.messageId;
       await this.unpinLiveCard(chatId);
       const mins = s.sessionDurationMinutes ?? 15;
       this.queues.reset(chatId);
-      await this.sender.enqueue(
-        "sendMessage",
-        {
-          chat_id: chatId,
-          text: `📻 *Session Complete*\n\nYour ${mins}-minute stream session has concluded.\nVoice chat call left. Assistant @${this.assistantUsername} remains in the group ready for next stream!`,
-          parse_mode: "Markdown",
-        },
-        "interactive",
-      );
+      if (msgId) {
+        const builder = new RichMessageBuilder()
+          .heading(2, "📻 SESSION COMPLETED")
+          .divider()
+          .paragraph(`Your ${mins}-minute stream session has concluded.`)
+          .paragraph(`Assistant @${this.assistantUsername} left the voice call and group chat.`)
+          .footer("PAPPY Media · Stream & Download Gateway");
+        const rich = builder.build();
+        const rows: KbButton[][] = [
+          [{ text: "📡 Start New Stream", callback_data: packCb("gm", "stream", 1), style: "success" }],
+          [{ text: "◀ Group Deck", callback_data: packCb("gm", "back", 1), style: "default" }],
+        ];
+        await this.sender.enqueue(
+          "editMessageText",
+          { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: { inline_keyboard: rows } },
+          "interactive",
+        ).catch(() => {});
+      } else {
+        await this.sender.enqueue(
+          "sendMessage",
+          {
+            chat_id: chatId,
+            text: `📻 *Session Complete*\n\nYour ${mins}-minute stream session has concluded.\nVoice chat call left and assistant @${this.assistantUsername} left the group chat.`,
+            parse_mode: "Markdown",
+          },
+          "interactive",
+        );
+      }
       return;
     }
 
@@ -554,16 +666,36 @@ export class StreamFlow {
       }
 
       await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+      const msgId = s.liveCard?.messageId;
       await this.unpinLiveCard(chatId);
       this.queues.reset(chatId);
-      await this.sender.enqueue(
-        "sendMessage",
-        {
-          chat_id: chatId,
-          text: `📻 All queued tracks finished. Assistant @${this.assistantUsername} left the voice call and remains in group!`,
-        },
-        "interactive",
-      );
+      if (msgId) {
+        const builder = new RichMessageBuilder()
+          .heading(2, "📻 QUEUE FINISHED")
+          .divider()
+          .paragraph("All queued tracks have concluded.")
+          .paragraph(`Assistant @${this.assistantUsername} left the voice call and group chat.`)
+          .footer("PAPPY Media · Stream & Download Gateway");
+        const rich = builder.build();
+        const rows: KbButton[][] = [
+          [{ text: "📡 Start New Stream", callback_data: packCb("gm", "stream", 1), style: "success" }],
+          [{ text: "◀ Group Deck", callback_data: packCb("gm", "back", 1), style: "default" }],
+        ];
+        await this.sender.enqueue(
+          "editMessageText",
+          { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: { inline_keyboard: rows } },
+          "interactive",
+        ).catch(() => {});
+      } else {
+        await this.sender.enqueue(
+          "sendMessage",
+          {
+            chat_id: chatId,
+            text: `📻 All queued tracks finished. Assistant @${this.assistantUsername} left the voice call and group chat.`,
+          },
+          "interactive",
+        );
+      }
       return;
     }
 
@@ -636,19 +768,26 @@ export class StreamFlow {
     chatType: string,
     locale = "en",
     isVideo = false,
+    existingMessageId?: number,
   ): Promise<void> {
     const isGroup = chatType === "group" || chatType === "supergroup";
     if (!isGroup) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.dm", {}, locale) }, "interactive");
       return;
     }
+    if (!(await this.isAdmin(chatId, userId))) {
+      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
+      return;
+    }
+
+    if (existingMessageId) {
+      this.queues.setLiveCard(chatId, { chatId, messageId: existingMessageId });
+      await this.sender.enqueue("pinChatMessage", { chat_id: chatId, message_id: existingMessageId, disable_notification: true }, "control").catch(() => {});
+    }
+
     const asst = await this.ensureAssistantReady(chatId);
     if (!asst.ok) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: asst.reason!, parse_mode: "Markdown" }, "interactive");
-      return;
-    }
-    if (!(await this.isAdmin(chatId, userId))) {
-      await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
       return;
     }
     if (!(await this.workerAlive())) {
@@ -695,24 +834,45 @@ export class StreamFlow {
     await this.startNext(chatId, locale, false);
   }
 
-  /** /stop — admins only. Leaves the call, clears everything. */
+  /** /stop — admins only. Leaves the call and group chat, clears everything. */
   async stop(chatId: number, userId: number, locale = "en"): Promise<void> {
     if (!(await this.isAdmin(chatId, userId))) {
       await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.need_admin", {}, locale) }, "interactive");
       return;
     }
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+    const s = this.queues.get(chatId);
+    const msgId = s.liveCard?.messageId;
     await this.unpinLiveCard(chatId);
     this.queues.reset(chatId);
-    await this.sender.enqueue(
-      "sendMessage",
-      {
-        chat_id: chatId,
-        text: `⏹️ *Stream Stopped*\n\nVoice chat session ended. Assistant account (@${this.assistantUsername}) remains in this group ready for future streams!`,
-        parse_mode: "Markdown",
-      },
-      "interactive",
-    );
+    if (msgId) {
+      const builder = new RichMessageBuilder()
+        .heading(2, "⏹️ STREAM STOPPED")
+        .divider()
+        .paragraph("The voice chat stream was stopped.")
+        .paragraph(`Assistant @${this.assistantUsername} left the voice call and group chat.`)
+        .footer("PAPPY Media · Stream & Download Gateway");
+      const rich = builder.build();
+      const rows: KbButton[][] = [
+        [{ text: "📡 Start New Stream", callback_data: packCb("gm", "stream", 1), style: "success" }],
+        [{ text: "◀ Group Deck", callback_data: packCb("gm", "back", 1), style: "default" }],
+      ];
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: { inline_keyboard: rows } },
+        "interactive",
+      ).catch(() => {});
+    } else {
+      await this.sender.enqueue(
+        "sendMessage",
+        {
+          chat_id: chatId,
+          text: `⏹️ *Stream Stopped*\n\nVoice chat session ended. Assistant account (@${this.assistantUsername}) left the call and group chat.`,
+          parse_mode: "Markdown",
+        },
+        "interactive",
+      );
+    }
   }
 
   /** /pause + /resume — admins only (optimistic card, worker event confirms). */
@@ -819,18 +979,35 @@ export class StreamFlow {
   async buttonStop(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
     if (!(await this.isAdmin(chatId, userId))) return "denied";
     await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+    const s = this.queues.get(chatId);
+    const msgId = s.liveCard?.messageId;
     await this.unpinLiveCard(chatId);
     this.queues.reset(chatId);
-    await this.sender.enqueue(
-      "sendMessage",
-      {
-        chat_id: chatId,
-        text: `⏹️ *Stream Stopped*\n\nVoice chat session ended. Assistant account (@${this.assistantUsername}) remains in this group ready for future streams!`,
-        parse_mode: "Markdown",
-      },
-      "interactive",
-    );
+    if (msgId) {
+      const builder = new RichMessageBuilder()
+        .heading(2, "⏹️ STREAM STOPPED")
+        .divider()
+        .paragraph("The voice chat stream was stopped.")
+        .paragraph(`Assistant @${this.assistantUsername} left the voice call and group chat.`)
+        .footer("PAPPY Media · Stream & Download Gateway");
+      const rich = builder.build();
+      const rows: KbButton[][] = [
+        [{ text: "📡 Start New Stream", callback_data: packCb("gm", "stream", 1), style: "success" }],
+        [{ text: "◀ Group Deck", callback_data: packCb("gm", "back", 1), style: "default" }],
+      ];
+      await this.sender.enqueue(
+        "editMessageText",
+        { chat_id: chatId, message_id: msgId, rich_message: rich.rich_message, reply_markup: { inline_keyboard: rows } },
+        "interactive",
+      ).catch(() => {});
+    }
     return "ok";
+  }
+
+  async cleanupChat(chatId: number): Promise<void> {
+    await this.bus.publish(buildCmd("stream.stop", chatId)).catch(() => {});
+    await this.unpinLiveCard(chatId);
+    this.queues.reset(chatId);
   }
 
   async buttonVolume(chatId: number, userId: number, target: string, delta = 0, locale = "en"): Promise<ButtonResult> {
@@ -888,14 +1065,6 @@ export class StreamFlow {
         await this.unpinLiveCard(chatId);
         if (s.state !== "idle" && !this.queues.isSessionActive(chatId)) {
           this.queues.reset(chatId);
-          await this.sender.enqueue(
-            "sendMessage",
-            {
-              chat_id: chatId,
-              text: `📻 Voice chat playback ended. @${this.assistantUsername} remains in the group.`,
-            },
-            "interactive",
-          );
         }
         break;
       case "error":

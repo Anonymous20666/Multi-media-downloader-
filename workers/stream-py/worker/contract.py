@@ -14,7 +14,7 @@ STREAM_EVT_CHANNEL = "pappy:stream:evt"
 STREAM_HB_KEY = "pappy:stream:hb"
 CONTRACT_V = 1
 
-CMD_TYPES = {"stream.play", "stream.pause", "stream.resume", "stream.stop", "stream.volume", "stream.ping"}
+CMD_TYPES = {"stream.play", "stream.pause", "stream.resume", "stream.stop", "stream.volume", "stream.ping", "stream.join", "stream.leave"}
 EVT_NAMES = {"track.started", "track.ended", "call.joined", "call.left", "paused", "resumed", "error", "pong"}
 
 
@@ -36,6 +36,7 @@ class Cmd:
     idempotency_key: str
     track: Optional[Track] = None
     level: Optional[int] = None
+    invite_link: Optional[str] = None
 
 
 @dataclass
@@ -88,8 +89,11 @@ def parse_cmd(raw: Any) -> Cmd:
     level = raw.get("level")
     if level is not None and (not isinstance(level, int) or not 0 <= level <= 200):
         raise ContractError("level must be 0..200")
+    invite_link = raw.get("inviteLink")
+    if invite_link is not None and not isinstance(invite_link, str):
+        invite_link = None
     return Cmd(id=raw["id"], type=ctype, stream_id=raw["streamId"], chat_id=raw["chatId"],
-               idempotency_key=raw["idempotencyKey"], track=track, level=level)
+               idempotency_key=raw["idempotencyKey"], track=track, level=level, invite_link=invite_link)
 
 
 def build_evt(evt: Evt) -> dict:

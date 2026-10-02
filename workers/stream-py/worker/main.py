@@ -164,6 +164,13 @@ def dispatch_one(bus: object, engine: CallEngine, stream_id_of: dict[int, str], 
         elif cmd.type == "stream.stop":
             engine.stop(cmd.chat_id)
             evt("call.left")
+        elif cmd.type == "stream.join":
+            target = getattr(cmd, "invite_link", None) or cmd.chat_id
+            engine.join_chat(target)
+            evt("call.joined")
+        elif cmd.type == "stream.leave":
+            engine.leave_chat(cmd.chat_id)
+            evt("call.left")
         elif cmd.type == "stream.volume":
             engine.set_volume(cmd.chat_id, cmd.level or 100)
         elif cmd.type == "stream.ping":

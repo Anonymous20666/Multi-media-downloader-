@@ -47,6 +47,12 @@ class CallEngine:
     def active(self) -> list[int]:
         raise NotImplementedError
 
+    def join_chat(self, chat_id_or_invite: str | int) -> bool:
+        raise NotImplementedError
+
+    def leave_chat(self, chat_id: int) -> bool:
+        raise NotImplementedError
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -91,6 +97,14 @@ class FakeEngine(CallEngine):
 
     def set_volume(self, chat_id: int, level: int) -> None:
         self._maybe_fail()
+
+    def join_chat(self, chat_id_or_invite: str | int) -> bool:
+        self._maybe_fail()
+        return True
+
+    def leave_chat(self, chat_id: int) -> bool:
+        self._maybe_fail()
+        return True
 
     def active(self) -> list[int]:
         return sorted(self.live)
@@ -150,25 +164,84 @@ class PyTgCallsEngine(CallEngine):
             return asyncio.run_coroutine_threadsafe(coro, self._app.loop).result(timeout=10)
         return self._app.loop.run_until_complete(coro)
 
-    def _ensure_group_call(self, chat_id: int) -> None:
+    def _ensure_group_call(self, chat_id: int) -> bool:
+        """Ensure a group call is active in the chat.
+        Returns True if a new call was created, False if already active.
+        """
         from pyrogram.raw.functions.channels import GetFullChannel
         from pyrogram.raw.functions.phone import CreateGroupCall
         import random
+        import time
+        import asyncio
 
-        async def _check_or_create() -> None:
+        created = False
+
+        async def _check_or_create() -> bool:
+            nonlocal created
             peer = await self._app.resolve_peer(chat_id)
             full = await self._app.invoke(GetFullChannel(channel=peer))
             call = getattr(full.full_chat, "call", None)
-            if not call:
-                await self._app.invoke(CreateGroupCall(peer=peer, random_id=random.randint(10000, 99999999)))
+            if not call or getattr(call, "id", 0) == 0:
+                await self._app.invoke(CreateGroupCall(peer=peer, random_id=random.randint(10000, 99999999), title="Pappy Radio 📻"))
+                created = True
+                for _ in range(8):
+                    await asyncio.sleep(0.5)
+                    full2 = await self._app.invoke(GetFullChannel(channel=peer))
+                    call2 = getattr(full2.full_chat, "call", None)
+                    if call2 and getattr(call2, "id", 0) != 0:
+                        break
+            return created
 
         try:
-            self._run_pyrogram(_check_or_create())
+            is_new = bool(self._run_pyrogram(_check_or_create()))
+            if is_new:
+                # Give Telegram WebRTC servers 2.0s to provision media relay transport endpoints
+                time.sleep(2.0)
+            return is_new
+        except Exception as e:
+            err_msg = str(e)
+            if "CHAT_ADMIN_REQUIRED" in err_msg:
+                raise EngineError("NEED_ADMIN", "Assistant account needs Admin privileges with 'Manage Video Chats' enabled to start the voice call.") from e
+            return False
+
+    def join_chat(self, chat_id_or_invite: str | int) -> bool:
+        """Join a group chat via invite link or chat_id."""
+        from pyrogram.errors import UserAlreadyParticipant
+
+        async def _join() -> bool:
+            try:
+                await self._app.join_chat(chat_id_or_invite)
+                return True
+            except UserAlreadyParticipant:
+                return True
+            except Exception as e:
+                if "USER_ALREADY_PARTICIPANT" in str(e):
+                    return True
+                raise EngineError("JOIN_FAILED", f"Could not join chat: {e}") from e
+
+        return bool(self._run_pyrogram(_join()))
+
+    def leave_chat(self, chat_id: int) -> bool:
+        """Leave a group chat to free assistant group quota for multi-group scaling."""
+        from pyrogram.errors import UserNotParticipant
+
+        async def _leave() -> bool:
+            try:
+                await self._app.leave_chat(chat_id)
+                return True
+            except UserNotParticipant:
+                return True
+            except Exception:
+                return False
+
+        try:
+            return bool(self._run_pyrogram(_leave()))
         except Exception:
-            pass
+            return False
 
     def play(self, chat_id: int, url: str, headers: Optional[dict] = None, is_video: bool = False) -> bool:
         from pytgcalls.types import AudioQuality, VideoQuality, MediaStream, GroupCallConfig
+        import time
 
         if is_video:
             stream = MediaStream(
@@ -189,39 +262,29 @@ class PyTgCallsEngine(CallEngine):
         if chat_id not in self._live:
             self._ensure_group_call(chat_id)
 
-        try:
-            self._call.play(chat_id, stream, config=config)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            err_name = type(e).__name__
-            err_msg = str(e)
-            if "TransportParseException" in err_name or "Transport not found" in err_msg or "Timeout" in err_name or "ConnectionNotFound" in err_name:
-                try:
-                    import time
+        for attempt in range(2):
+            try:
+                self._call.play(chat_id, stream, config=config)
+                break
+            except Exception as e:
+                err_name = type(e).__name__
+                err_msg = str(e)
+                if attempt == 0 and ("TransportParseException" in err_name or "Transport not found" in err_msg or "Timeout" in err_name or "ConnectionNotFound" in err_name or "NoActiveGroupCall" in err_name):
                     try:
                         if hasattr(self._call, "_clear_cache"):
                             self._call._clear_cache(chat_id)
                     except Exception:
                         pass
-                    time.sleep(1.0)
-                    self._call.play(chat_id, stream, config=config)
-                except Exception as retry_e:
-                    raise EngineError("PLAY_FAILED", f"{type(retry_e).__name__}: {retry_e}") from retry_e
-            elif "NoActiveGroupCall" in err_name or "No active group call" in err_msg or "GroupCallNotFound" in err_name:
-                try:
                     self._ensure_group_call(chat_id)
-                    import time
-                    time.sleep(1.0)
-                    self._call.play(chat_id, stream, config=config)
-                except Exception as retry_e:
-                    raise EngineError("NO_GROUP_CALL", f"Failed to auto-start voice chat: {retry_e}. Please start a Video/Voice Chat in the group header.") from retry_e
-            elif "UserNotParticipant" in err_name or "USER_NOT_PARTICIPANT" in err_msg:
-                raise EngineError("NOT_IN_GROUP", "Assistant account is not in this group. Please add @pappy_d_spammer to this group.") from e
-            elif "ChatAdminRequired" in err_name or "CHAT_ADMIN_REQUIRED" in err_msg:
-                raise EngineError("NEED_ADMIN", "Assistant account needs Admin privileges with 'Manage Video Chats' enabled.") from e
-            else:
-                raise EngineError("PLAY_FAILED", f"{err_name}: {err_msg}") from e
+                    time.sleep(1.5)
+                    continue
+                elif "UserNotParticipant" in err_name or "USER_NOT_PARTICIPANT" in err_msg:
+                    raise EngineError("NOT_IN_GROUP", "Assistant account @pappy_d_spammer is not in this group.") from e
+                elif "ChatAdminRequired" in err_name or "CHAT_ADMIN_REQUIRED" in err_msg:
+                    raise EngineError("NEED_ADMIN", "Assistant account needs Admin privileges with 'Manage Video Chats' enabled.") from e
+                else:
+                    raise EngineError("PLAY_FAILED", f"{err_name}: {err_msg}") from e
+
         fresh = chat_id not in self._live
         self._live.add(chat_id)
         if fresh:
@@ -230,12 +293,26 @@ class PyTgCallsEngine(CallEngine):
         return fresh
 
     def pause(self, chat_id: int) -> None:
-        if not self._call.pause(chat_id):
-            raise EngineError("PAUSE_FAILED", "engine declined pause")
+        if chat_id not in self._live:
+            return
+        try:
+            if not self._call.pause(chat_id):
+                raise EngineError("PAUSE_FAILED", "engine declined pause")
+        except Exception as e:
+            if "ConnectionNotFound" in type(e).__name__:
+                return
+            raise
 
     def resume(self, chat_id: int) -> None:
-        if not self._call.resume(chat_id):
-            raise EngineError("RESUME_FAILED", "engine declined resume")
+        if chat_id not in self._live:
+            return
+        try:
+            if not self._call.resume(chat_id):
+                raise EngineError("RESUME_FAILED", "engine declined resume")
+        except Exception as e:
+            if "ConnectionNotFound" in type(e).__name__:
+                return
+            raise
 
     def stop(self, chat_id: int) -> None:
         try:
@@ -248,9 +325,19 @@ class PyTgCallsEngine(CallEngine):
                 pass
         finally:
             self._live.discard(chat_id)
+            # Ephemeral scaling: leave the group chat so the assistant doesn't hit Telegram group limits
+            try:
+                self.leave_chat(chat_id)
+            except Exception:
+                pass
 
     def set_volume(self, chat_id: int, level: int) -> None:
-        self._call.change_volume_call(chat_id, level)
+        if chat_id not in self._live:
+            return
+        try:
+            self._call.change_volume_call(chat_id, level)
+        except Exception:
+            pass
 
     def active(self) -> list[int]:
         return sorted(self._live)

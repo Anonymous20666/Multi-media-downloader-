@@ -236,3 +236,176 @@ export function renderGroupMenuSettingsPrompt(locale = "en"): { rich_message: st
     reply_markup: { inline_keyboard: rows },
   };
 }
+
+export interface BotAdminCheckResult {
+  isAdmin: boolean;
+  canPromoteMembers: boolean;
+  canInviteUsers: boolean;
+  canManageVideoChats: boolean;
+  canDeleteMessages: boolean;
+  missingPermissions: string[];
+}
+
+export function checkChatMemberPermissions(member: unknown): BotAdminCheckResult {
+  if (!member || typeof member !== "object") {
+    return {
+      isAdmin: false,
+      canPromoteMembers: false,
+      canInviteUsers: false,
+      canManageVideoChats: false,
+      canDeleteMessages: false,
+      missingPermissions: ["Make Bot Admin", "Add Admins", "Invite Users", "Manage Video Chats"],
+    };
+  }
+  const m = member as Record<string, unknown>;
+  const status = String(m.status ?? "");
+  if (status === "creator") {
+    return {
+      isAdmin: true,
+      canPromoteMembers: true,
+      canInviteUsers: true,
+      canManageVideoChats: true,
+      canDeleteMessages: true,
+      missingPermissions: [],
+    };
+  }
+  const isAdmin = status === "administrator";
+  const canPromoteMembers = Boolean(m.can_promote_members);
+  const canInviteUsers = Boolean(m.can_invite_users);
+  const canManageVideoChats = Boolean(m.can_manage_video_chats || m.can_manage_voice_chats);
+  const canDeleteMessages = Boolean(m.can_delete_messages);
+
+  const missing: string[] = [];
+  if (!isAdmin) missing.push("Make Bot Admin");
+  if (!canPromoteMembers) missing.push("Add Admins");
+  if (!canInviteUsers) missing.push("Invite Users");
+  if (!canManageVideoChats) missing.push("Manage Video Chats");
+
+  return {
+    isAdmin,
+    canPromoteMembers,
+    canInviteUsers,
+    canManageVideoChats,
+    canDeleteMessages,
+    missingPermissions: missing,
+  };
+}
+
+export function renderBotAdminRequiredRich(botUsername: string, check: BotAdminCheckResult): GroupMenuPayload {
+  const promoteIcon = check.canPromoteMembers ? "✅" : "❌";
+  const inviteIcon = check.canInviteUsers ? "✅" : "❌";
+  const vcIcon = check.canManageVideoChats ? "✅" : "❌";
+  const deleteIcon = check.canDeleteMessages ? "✅" : "❌";
+
+  const builder = new RichMessageBuilder()
+    .heading(1, "⚡ BOT SETUP: ADMIN PRIVILEGES REQUIRED")
+    .paragraph(
+      `To stream music & movies in group voice chats and serve multi-GC calls, @${botUsername} must be an Administrator with permissions to invite and promote the stream assistant.`,
+    )
+    .divider()
+    .heading(3, "📋 Required Permissions")
+    .table(
+      [
+        [
+          { text: "Permission", is_header: true, align: "left", valign: "middle" },
+          { text: "Status", is_header: true, align: "center", valign: "middle" },
+          { text: "Purpose", is_header: true, align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Add New Admins", align: "left", valign: "middle" },
+          { text: promoteIcon, align: "center", valign: "middle" },
+          { text: "Auto-promote DJ Assistant", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Invite Users via Link", align: "left", valign: "middle" },
+          { text: inviteIcon, align: "center", valign: "middle" },
+          { text: "Auto-join DJ Assistant on demand", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Manage Video Chats", align: "left", valign: "middle" },
+          { text: vcIcon, align: "center", valign: "middle" },
+          { text: "Auto-start & manage group calls", align: "left", valign: "middle" },
+        ],
+        [
+          { text: "Delete Messages", align: "left", valign: "middle" },
+          { text: deleteIcon, align: "center", valign: "middle" },
+          { text: "Keep group chat clean (§Zero Clutter)", align: "left", valign: "middle" },
+        ],
+      ],
+      { is_bordered: true, is_striped: true },
+    )
+    .divider()
+    .details("💡 Why are these required?", [
+      {
+        type: "paragraph",
+        text: "The stream assistant account dynamically joins on-demand when a call starts and leaves when playback finishes to scale across thousands of groups without hitting Telegram group limits. The bot needs permission to invite and promote the assistant.",
+      },
+    ])
+    .pullquote("Group Settings → Administrators → Add Administrator → @" + botUsername)
+    .footer("PAPPY Media · Stream & Download Gateway");
+
+  const rows: KbButton[][] = [
+    [
+      {
+        text: "➕ Grant Admin Privileges",
+        url: `https://t.me/${botUsername}?startgroup=true&admin=promote_members+invite_users+manage_video_chats+delete_messages`,
+        style: "primary",
+      },
+    ],
+    [
+      {
+        text: "🔄 Check Permissions",
+        callback_data: packCb("gma", "check", 1),
+        style: "success",
+      },
+    ],
+  ];
+
+  const rendered = builder.build();
+  return {
+    rich_message: rendered.rich_message,
+    reply_markup: { inline_keyboard: rows },
+    blocks: rendered.blocks,
+  };
+}
+
+export function renderBotAdminRequiredFallback(botUsername: string, check: BotAdminCheckResult): FallbackMessage {
+  const promoteIcon = check.canPromoteMembers ? "✅" : "❌";
+  const inviteIcon = check.canInviteUsers ? "✅" : "❌";
+  const vcIcon = check.canManageVideoChats ? "✅" : "❌";
+  const deleteIcon = check.canDeleteMessages ? "✅" : "❌";
+
+  const lines = [
+    "⚡ *BOT SETUP: ADMIN PRIVILEGES REQUIRED*",
+    "",
+    `To stream music & movies in group voice chats, promote @${botUsername} to Administrator with the following permissions:`,
+    "",
+    `${promoteIcon} *Add New Admins* — auto-promote DJ assistant`,
+    `${inviteIcon} *Invite Users via Link* — auto-join DJ assistant`,
+    `${vcIcon} *Manage Video Chats* — auto-start & manage VC`,
+    `${deleteIcon} *Delete Messages* — keep group clean`,
+    "",
+    "👉 *How to grant:* Group Settings → Administrators → Add Administrator → Select @" + botUsername + " and turn on the switches above.",
+  ];
+
+  const rows: KbButton[][] = [
+    [
+      {
+        text: "➕ Grant Admin Privileges",
+        url: `https://t.me/${botUsername}?startgroup=true&admin=promote_members+invite_users+manage_video_chats+delete_messages`,
+      },
+    ],
+    [
+      {
+        text: "🔄 Check Permissions",
+        callback_data: packCb("gma", "check", 1),
+      },
+    ],
+  ];
+
+  return {
+    text: lines.join("\n"),
+    reply_markup: { inline_keyboard: rows },
+  };
+}
+

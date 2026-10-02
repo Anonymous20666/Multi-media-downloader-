@@ -22,11 +22,21 @@ export type StreamTrack = z.infer<typeof TrackSchema>;
 export const CmdSchema = z.object({
   v: z.literal(CONTRACT_V),
   id: z.string().min(1),
-  type: z.enum(["stream.play", "stream.pause", "stream.resume", "stream.stop", "stream.volume", "stream.ping"]),
+  type: z.enum([
+    "stream.play",
+    "stream.pause",
+    "stream.resume",
+    "stream.stop",
+    "stream.volume",
+    "stream.ping",
+    "stream.join",
+    "stream.leave",
+  ]),
   streamId: z.string().min(1),
   chatId: z.number().int(),
   track: TrackSchema.optional(),
   level: z.number().int().min(0).max(200).optional(),
+  inviteLink: z.string().optional(),
   idempotencyKey: z.string().min(1),
 });
 export type StreamCmd = z.infer<typeof CmdSchema>;
@@ -59,7 +69,7 @@ let seq = 1;
 export function buildCmd(
   type: StreamCmd["type"],
   chatId: number,
-  opts: { track?: StreamTrack; level?: number } = {},
+  opts: { track?: StreamTrack; level?: number; inviteLink?: string } = {},
 ): StreamCmd {
   const nonce = `${Date.now().toString(36)}${(seq++).toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   return CmdSchema.parse({
@@ -70,6 +80,7 @@ export function buildCmd(
     chatId,
     ...(opts.track ? { track: opts.track } : {}),
     ...(opts.level !== undefined ? { level: opts.level } : {}),
+    ...(opts.inviteLink ? { inviteLink: opts.inviteLink } : {}),
     idempotencyKey: `idem_${nonce}`,
   });
 }

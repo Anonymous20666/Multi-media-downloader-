@@ -613,8 +613,11 @@ export function setupBot(cfg: Config, sender: Sender, log: Logger, flows: BotFlo
           else if (r === "denied") await toast(t("stream.need_admin"), true);
           break;
         }
-        case "svl": {
-          const r = await flows.stream.buttonVolume(chatId, userId, parsed.target);
+        case "svl":
+        case "svu":
+        case "svd": {
+          const delta = parsed.action === "svu" ? 10 : parsed.action === "svd" ? -10 : 0;
+          const r = await flows.stream.buttonVolume(chatId, userId, parsed.target, delta);
           if (r === "stale") await toast(t("stream.stale"));
           else if (r === "denied") await toast(t("stream.need_admin"), true);
           break;

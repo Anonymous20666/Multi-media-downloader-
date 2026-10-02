@@ -57,6 +57,7 @@ export interface KbButton {
   url?: string;
   switch_inline_query_current_chat?: string;
   switch_inline_query?: string;
+  style?: "default" | "primary" | "danger" | "success";
 }
 
 export interface FallbackMessage {

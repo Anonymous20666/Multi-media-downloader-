@@ -23,18 +23,23 @@ export function renderLiveCard(d: LiveCardData, locale = "en"): FallbackMessage 
   const v = `v${d.version}`;
   const transport: KbButton[] =
     d.state === "paused"
-      ? [{ text: "▶", callback_data: packCb("sr", v, 1) }]
-      : [{ text: "⏸", callback_data: packCb("sp", v, 1) }];
-  transport.push({ text: "⏭", callback_data: packCb("ss", v, 1) });
-  transport.push({ text: "⏹", callback_data: packCb("sx", v, 1) });
+      ? [{ text: "▶ Resume", callback_data: packCb("sr", v, 1), style: "success" }]
+      : [{ text: "⏸ Pause", callback_data: packCb("sp", v, 1), style: "primary" }];
+  transport.push({ text: "⏭ Next", callback_data: packCb("ss", v, 1), style: "primary" });
+  transport.push({ text: "⏹ Stop", callback_data: packCb("sx", v, 1), style: "danger" });
 
-  const controls: KbButton[] = [
-    { text: loopLabel, callback_data: packCb("slp", v, 1) },
-    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1) },
-    { text: "📋 Queue", callback_data: packCb("sqe", v, 1) },
+  const volControls: KbButton[] = [
+    { text: "🔉 -10%", callback_data: packCb("svd", v, 1), style: "default" },
+    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1), style: "primary" },
+    { text: "🔊 +10%", callback_data: packCb("svu", v, 1), style: "default" },
   ];
 
-  return { text: lines.join("\n"), reply_markup: { inline_keyboard: [transport, controls] } };
+  const controls: KbButton[] = [
+    { text: loopLabel, callback_data: packCb("slp", v, 1), style: "default" },
+    { text: "📋 Queue", callback_data: packCb("sqe", v, 1), style: "default" },
+  ];
+
+  return { text: lines.join("\n"), reply_markup: { inline_keyboard: [transport, volControls, controls] } };
 }
 
 import { RichMessageBuilder } from "../ui/components.js";
@@ -48,15 +53,20 @@ export function renderLiveCardRich(d: LiveCardData, locale = "en"): Record<strin
 
   const transport: KbButton[] =
     d.state === "paused"
-      ? [{ text: "▶", callback_data: packCb("sr", v, 1) }]
-      : [{ text: "⏸", callback_data: packCb("sp", v, 1) }];
-  transport.push({ text: "⏭", callback_data: packCb("ss", v, 1) });
-  transport.push({ text: "⏹", callback_data: packCb("sx", v, 1) });
+      ? [{ text: "▶ Resume", callback_data: packCb("sr", v, 1), style: "success" }]
+      : [{ text: "⏸ Pause", callback_data: packCb("sp", v, 1), style: "primary" }];
+  transport.push({ text: "⏭ Next", callback_data: packCb("ss", v, 1), style: "primary" });
+  transport.push({ text: "⏹ Stop", callback_data: packCb("sx", v, 1), style: "danger" });
+
+  const volControls: KbButton[] = [
+    { text: "🔉 -10%", callback_data: packCb("svd", v, 1), style: "default" },
+    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1), style: "primary" },
+    { text: "🔊 +10%", callback_data: packCb("svu", v, 1), style: "default" },
+  ];
 
   const controls: KbButton[] = [
-    { text: loopLabel, callback_data: packCb("slp", v, 1) },
-    { text: `🔊 ${vol}%`, callback_data: packCb("svl", v, 1) },
-    { text: "📋 Queue", callback_data: packCb("sqe", v, 1) },
+    { text: loopLabel, callback_data: packCb("slp", v, 1), style: "default" },
+    { text: "📋 Queue", callback_data: packCb("sqe", v, 1), style: "default" },
   ];
 
   const specRows = [
@@ -96,7 +106,7 @@ export function renderLiveCardRich(d: LiveCardData, locale = "en"): Record<strin
   const rendered = builder.build();
   return {
     rich_message: rendered.rich_message,
-    reply_markup: { inline_keyboard: [transport, controls] },
+    reply_markup: { inline_keyboard: [transport, volControls, controls] },
     blocks: rendered.blocks,
   };
 }

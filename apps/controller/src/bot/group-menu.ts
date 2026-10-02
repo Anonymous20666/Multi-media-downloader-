@@ -26,17 +26,17 @@ export function renderGroupMenuRich(chatTitle: string, locale = "en"): GroupMenu
 
   const rows: KbButton[][] = [
     [
-      { text: "🎵 Play Music", callback_data: packCb("gm", "play", 1) },
-      { text: "🎬 Movies & Series", callback_data: packCb("gm", "movies", 1) },
+      { text: "🎵 Play Music", callback_data: packCb("gm", "play", 1), style: "success" },
+      { text: "🎬 Movies & Series", callback_data: packCb("gm", "movies", 1), style: "primary" },
     ],
     [
-      { text: "📡 Stream in VC", callback_data: packCb("gm", "stream", 1) },
-      { text: "🎞 Shorts & Reels", callback_data: packCb("gm", "shorts", 1) },
+      { text: "📡 Stream in VC", callback_data: packCb("gm", "stream", 1), style: "primary" },
+      { text: "🎞 Shorts & Reels", callback_data: packCb("gm", "shorts", 1), style: "default" },
     ],
     [
-      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1) },
-      { text: "⏹ Stop", callback_data: packCb("gm", "stop_stream", 1) },
-      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1) },
+      { text: "📋 Queue", callback_data: packCb("sqe", "1", 1), style: "default" },
+      { text: "⏹ Stop", callback_data: packCb("gm", "stop_stream", 1), style: "danger" },
+      { text: "⚙️ Settings", callback_data: packCb("gm", "settings", 1), style: "default" },
     ],
   ];
 

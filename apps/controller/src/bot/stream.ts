@@ -12,6 +12,7 @@ import { buildCmd, type StreamEvt, type StreamTrack } from "../stream/contract.j
 import { StreamQueues, type QueuedTrack } from "../stream/queue.js";
 import type { StreamBus } from "../stream/bus.js";
 import { renderLiveCard, renderLiveCardRich, renderQueue } from "./stream-ui.js";
+import { resolveFullTrack } from "../stream/full-audio.js";
 
 const ADMINS = new Set(["creator", "administrator"]);
 
@@ -263,6 +264,16 @@ export class StreamFlow {
       }
 
       if (!resolvedMediaUrl) {
+        const full = await resolveFullTrack(q, isVideo);
+        if (full?.url) {
+          resolvedMediaUrl = full.url;
+          title = full.title || title;
+          performer = full.author;
+          duration = full.duration;
+        }
+      }
+
+      if (!resolvedMediaUrl) {
         await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_source", {}, locale) }, "interactive");
         return;
       }
@@ -284,19 +295,32 @@ export class StreamFlow {
         this.log.warn("stream search failed", { error: (e as Error).message });
       }
       const hit = items.find((i) => i.previewUrl || i.pageUrl);
-      if (!hit) {
-        await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_results", { q }, locale) }, "interactive");
-        return;
+      if (hit) {
+        track = {
+          title: hit.title,
+          performer: hit.author ?? undefined,
+          pageUrl: hit.pageUrl ?? hit.previewUrl ?? "",
+          duration: hit.duration ?? undefined,
+          addedBy: userId,
+          isVideo,
+        };
+      } else {
+        const full = await resolveFullTrack(q, isVideo);
+        if (full?.url) {
+          track = {
+            title: full.title,
+            performer: full.author,
+            pageUrl: `https://music.youtube.com/search?q=${encodeURIComponent(q)}`,
+            mediaUrl: full.url,
+            duration: full.duration,
+            addedBy: userId,
+            isVideo,
+          };
+        } else {
+          await this.sender.enqueue("sendMessage", { chat_id: chatId, text: t("stream.no_results", { q }, locale) }, "interactive");
+          return;
+        }
       }
-      track = {
-        title: hit.title,
-        performer: hit.author ?? undefined,
-        pageUrl: hit.pageUrl ?? hit.previewUrl ?? "",
-        mediaUrl: hit.previewUrl ?? undefined,
-        duration: hit.duration ?? undefined,
-        addedBy: userId,
-        isVideo,
-      };
     }
 
     const res = this.queues.enqueue(chatId, track);
@@ -334,6 +358,8 @@ export class StreamFlow {
       return;
     }
     let mediaUrl: string | null = next.mediaUrl ?? null;
+    let duration: number | null = next.duration ?? null;
+
     if (!mediaUrl && next.pageUrl) {
       try {
         const { manifest } = await this.manager.resolve(next.pageUrl);
@@ -343,8 +369,20 @@ export class StreamFlow {
           // Strictly audio! NEVER fall back to image URL!
           mediaUrl = manifest.media.find((x) => x.type === "audio" || x.hasAudio)?.url ?? null;
         }
+        if (manifest.duration) duration = manifest.duration;
       } catch (e) {
         this.log.warn("stream resolve failed", { error: (e as Error).message });
+      }
+
+      // Check if resolved media is an Apple Music 30s preview clip or missing:
+      const isClip30s = mediaUrl && /AudioPreview|mzaf_|itunes\.apple\.com/i.test(mediaUrl);
+      if (!mediaUrl || isClip30s) {
+        const queryTerm = `${next.title} ${next.performer || ""}`.trim();
+        const full = await resolveFullTrack(queryTerm, next.isVideo);
+        if (full?.url) {
+          mediaUrl = full.url;
+          if (full.duration) duration = full.duration;
+        }
       }
     }
     if (!mediaUrl) {
@@ -439,10 +477,14 @@ export class StreamFlow {
     await this.sender.enqueue("sendMessage", { chat_id: chatId, text: renderQueue(s.current, s.queue, locale), parse_mode: "Markdown" }, "interactive");
   }
 
-  /** Transport buttons (sp/sr/ss/sx/slp/svl/sqe). Target carries the card version. */
+  /** Transport buttons (sp/sr/ss/sx/slp/svl/sqe). Check that a stream is active. */
   private check(target: string, chatId: number): boolean {
+    const s = this.queues.get(chatId);
+    if (s.state === "idle") return false;
     const m = /^v(\d+)$/.exec(target);
-    return m !== null && Number(m[1]) === this.queues.get(chatId).version;
+    if (!m) return true;
+    const ver = Number(m[1]);
+    return Math.abs(ver - s.version) <= 5;
   }
 
   async buttonPause(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
@@ -480,10 +522,10 @@ export class StreamFlow {
     return "ok";
   }
 
-  async buttonVolume(chatId: number, userId: number, target: string, locale = "en"): Promise<ButtonResult> {
+  async buttonVolume(chatId: number, userId: number, target: string, delta = 0, locale = "en"): Promise<ButtonResult> {
     if (!this.check(target, chatId)) return "stale";
     if (!(await this.isAdmin(chatId, userId))) return "denied";
-    const nextVol = this.queues.cycleVolume(chatId);
+    const nextVol = delta !== 0 ? this.queues.adjustVolume(chatId, delta) : this.queues.cycleVolume(chatId);
     await this.bus.publish(buildCmd("stream.volume", chatId, { level: nextVol })).catch(() => {});
     await this.showCard(chatId, locale);
     return "ok";

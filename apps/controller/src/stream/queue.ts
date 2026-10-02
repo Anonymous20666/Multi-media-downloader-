@@ -123,6 +123,13 @@ export class StreamQueues {
     return next;
   }
 
+  adjustVolume(chatId: number, delta: number): number {
+    const s = this.get(chatId);
+    s.volume = Math.max(0, Math.min(200, Math.round(s.volume + delta)));
+    s.version++;
+    return s.volume;
+  }
+
   reset(chatId: number): void {
     const prev = this.get(chatId);
     this.map.set(chatId, {
